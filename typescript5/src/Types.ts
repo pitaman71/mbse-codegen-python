@@ -14,8 +14,11 @@
  *   a class a field names before its own step is registered empty, and filled by that step. A field's annotation is
  *   read as `Dataclass` writes one, and any other is refused.
  *
- * `generate(schemas, policy)` and `read(module, schemas)` run each to the end. `frozen` is the one thing a schema does
- * not hold: reading code back loses it, and the trace of the generation keeps it.
+ * `generate(schemas, policy, earlier)` and `read(module, schemas)` run each to the end. `frozen` is the one thing a
+ * schema does not hold: reading code back loses it, and the trace of the generation keeps it. A generation given the
+ * steps of an earlier one takes each decision again where its key (`Dataclass(s=Contact)`, by the schema's name) still
+ * occurs, so after a change of the schemas only a new schema asks; `session.orphans` are the decisions about schemas
+ * now gone, and mbse-patterns' `Transforms.diff` compares the two.
  */
 
 import { Expressions as E } from "@mbse/expressions";
@@ -253,9 +256,11 @@ export const FROM_PYTHON = [Schema];
 export const PLAIN = new T.Policy(new T.Clause("Dataclass", { frozen: false }));
 
 /** A session that renders the schemas `schemas` registers, and those they refer to, as the dataclasses of a new module,
- * run to the end by `policy`; the module is its store's output (`text(session)`). */
-export function generate(schemas: Stores.Store, policy: T.Policy = PLAIN): T.Session {
-  const session = new T.Session(store(schemas, (Py.LANGUAGE.Builders as any).Module().create()), [...TO_PYTHON]);
+ * run to the end: each decision an `earlier` step with its key took (`Dataclass(s=Contact)`) taken again, the others by
+ * `policy`; the module is its store's output (`text(session)`). */
+export function generate(schemas: Stores.Store, policy: T.Policy = PLAIN, earlier: Iterable<T.Step> = []): T.Session {
+  const session = new T.Session(store(schemas, (Py.LANGUAGE.Builders as any).Module().create()), [...TO_PYTHON], {}, null,
+    earlier);
   session.run(policy);
   return session;
 }

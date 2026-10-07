@@ -84,7 +84,10 @@ check(contact.ref && [...contact.properties.keys()].join() === "name,home", "rea
 3. **What reads back.** A `@dataclass` class (`@dataclass(...)` too) whose annotations are written as `Dataclass`
    writes them, `| None` or not; anything else raises `ValueError` naming the field. Reading registers the schemas in
    the store given, and fills a schema a field names when its class is read.
-4. **Round trips.** Schemas to source to schemas gives the same schemas; source to schemas to source gives the source as
+4. **Regenerating.** `Types.generate(schemas, policy, earlier=session.steps)` takes each earlier decision again where
+   its key (`Dataclass(s=Contact)`) still occurs: after the schemas change, only new schemas ask. `session.orphans` are
+   decisions about schemas now gone; `Transforms.diff(earlier, later)` compares two generations.
+5. **Round trips.** Schemas to source to schemas gives the same schemas; source to schemas to source gives the source as
    Python 3.12 prints it, given the same decisions. `frozen` is the one thing a schema does not hold.
 
 The design, and what is not rendered yet (unions, parameters, relations): [CODEGEN.md](https://github.com/pitaman71/mbse-codegen-python/blob/main/docs/CODEGEN.md).

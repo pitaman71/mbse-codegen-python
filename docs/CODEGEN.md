@@ -57,6 +57,11 @@ requires.
   registered empty, which `Schema`'s after does not take for that class's schema unless the class has no fields, and is
   filled when the class is read. An annotation `Dataclass` does not write is refused, naming the field (`Bad.x: cannot
   read the annotation dict[str, int]`).
+- **Regenerating reuses decisions.** A step's key is `Dataclass(s=Contact)`, by the schema's path, its name
+  (mbse-schemas' `Paths`). Given the earlier steps (`generate(schemas, policy, earlier)`, or a session's `earlier`), a
+  generation takes each decision again where its key still occurs, so after the schemas change only a new schema
+  asks; the decisions about schemas now gone are `orphans`, and `Transforms.diff` lists what was added, removed and
+  decided otherwise (mbse-patterns 0.8).
 - **Round trips are laws, tested both ways.** Schemas to source to schemas gives the same schemas, compared as their
   modules' JSON; source to schemas to source gives the source as mbse-programs' Python 3.12 prints it, taking the same
   decisions again. `frozen` is the one thing a schema does not hold: the trace of the generation keeps it.
@@ -78,6 +83,8 @@ requires.
 - Codegen matches schemas through mbse-schemas' `Reflection.of(store)` (0.8), and compares what they hold with
   mbse-expressions' deep equality (0.5).
 - One transform per class, not per field: a step is a decision, and a field has none yet.
+- Decisions are keyed by schema names (0.2), so they survive any change but a rename; a renamed schema's decision is
+  an orphan, for the person to confirm again (mbse-patterns' open question on renames).
 
 ---
 
