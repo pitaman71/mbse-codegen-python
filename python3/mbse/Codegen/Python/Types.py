@@ -32,25 +32,46 @@ from mbse.Patterns import Predicates as P, Transforms as T
 from mbse.Programs.Python import Python312, Syntax as Py
 from mbse.Schemas.Framework import Bindings, Proxies, Reflection, Schemas as S, Stores
 
-__all__ = ["OUTPUT", "Output", "Generated", "store", "Dataclass", "Schema", "TO_PYTHON", "FROM_PYTHON", "PLAIN",
+__all__ = ["OUTPUT", "NATIVES", "KEYWORDS", "DEPTH", "Output", "Generated", "store", "Dataclass", "Schema", "TO_PYTHON",
+           "FROM_PYTHON", "PLAIN", "missing",
            "generate", "read", "text"]
 
 OUTPUT = "Codegen.Output"
 NATIVES = ("bool", "int", "float", "str", "bytes")
 """The basic natives' tokens, which are also Python's names for them."""
+KEYWORDS = ("False", "None", "True", "and", "as", "assert", "async", "await", "break", "class", "continue", "def", "del",
+            "elif", "else", "except", "finally", "for", "from", "global", "if", "import", "in", "is", "lambda",
+            "nonlocal", "not", "or", "pass", "raise", "return", "try", "while", "with", "yield")
+"""Python's keywords: a field so named is written with a trailing underscore (`from_`), and read back without it."""
+DEPTH = 4
+"""How deeply lists nest in a field's type (`list[list[int]]` is 2)."""
+_IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
 Generated = S.OfRelation.Builder().name("Codegen.Generated").links("output", "module").create()
-_OutputSchema = S.OfObject.Builder().name(OUTPUT).ref().singleton(OUTPUT).relations(
+_OutputSchema = S.OfObject.Builder().name(OUTPUT).ref().singleton(OUTPUT).properties(
+    lambda p: p.name("identifiers").of(lambda t: t.as_indexed(lambda i: i.of(lambda x: x.as_native(str)))),
+    lambda p: p.name("keywords").of(lambda t: t.as_indexed(lambda i: i.of(lambda x: x.as_native(str))))).relations(
     lambda r: r.name("modules").of(Generated).me("output")).create()
 
 
+def _spellable(name: str | None) -> bool:
+    return name is not None and _IDENTIFIER.fullmatch(name) is not None and name not in KEYWORDS
+
+
 class Output:
-    """The output of a session: the module written or read."""
+    """The output of a session: the module written or read, and what Python can spell: `identifiers`, the names of the
+    schemas and their properties that are Python identifiers and not keywords, and `keywords`."""
 
     Schema = _OutputSchema
 
-    def __init__(self, module: Py.Module | None = None):
-        self.module = module
+    def __init__(self, module: Py.Module | None = None, schemas: Stores.Store | None = None):
+        self.module, self.schemas = module, schemas
+
+    @property
+    def identifiers(self) -> list[str]:
+        names = [] if self.schemas is None else [name for schema in self.schemas.schemas for name in (
+            schema.name, *getattr(schema, "properties", {}))]
+        return sorted({name for name in names if _spellable(name)})
 
     def identity(self) -> int:
         return id(self)
@@ -66,8 +87,9 @@ class Output:
 
 
 _BINDING = Bindings.Binding(
-    _OutputSchema, lambda output: Bindings.State({}, {"modules": [Bindings.Entry({"module": m}) for m in (
-        [] if output.module is None else [output.module])]}),
+    _OutputSchema, lambda output: Bindings.State(
+        {"identifiers": output.identifiers, "keywords": list(KEYWORDS)},
+        {"modules": [Bindings.Entry({"module": m}) for m in ([] if output.module is None else [output.module])]}),
     lambda state: Output(*[e.links["module"] for e in state.entries.get("modules", [])]))
 
 
@@ -75,8 +97,10 @@ def store(schemas: Stores.Store, module: Py.Module) -> Stores.Combined:
     """The store a session runs over: the schemas `schemas` registers and those they refer to, Python's syntax trees,
     and the output, which holds `module`."""
     outputs = Bindings.OfStore([(_OutputSchema, lambda instance=None: Bindings.Builder(_BINDING, instance))], [Generated])
-    outputs.singleton(OUTPUT).module = module
-    return Stores.Combined(Reflection.of(schemas), Py.LANGUAGE.Builders, outputs)
+    reflected = Reflection.of(schemas)
+    output = outputs.singleton(OUTPUT)
+    output.module, output.schemas = module, reflected
+    return Stores.Combined(reflected, Py.LANGUAGE.Builders, outputs)
 
 
 def _module(store: Stores.Combined) -> Py.Module:
@@ -89,26 +113,40 @@ def _schemas(store: Stores.Combined) -> Stores.Store:
 
 # --- Schemas to classes ---
 
-s, c, n, k, t, p = (E.variable(name) for name in ("s", "c", "n", "k", "t", "p"))
+s, c, n, k, t, p, o, x = (E.variable(name) for name in ("s", "c", "n", "k", "t", "p", "o", "x"))
+
+
+def _basic(type_: E.Writer) -> E.Writer:
+    return type_.get("native").get("format").eq("basic")
 
 
 def _simple(type_: E.Writer) -> E.Writer:
-    """A basic native or a named schema."""
-    return type_.get("native").get("format").eq("basic").or_(type_.has("named"))
+    """A basic native, or a named object schema."""
+    named = P.Exists(lambda q: q.symbols({"x": S.OfObject.Schema}).requires(
+        x.get("name").eq(type_.get("named").get("name"))))
+    return _basic(type_).or_(E.operation("and", type_.has("named"), named))
 
 
-def _rendered(type_: E.Writer) -> E.Writer:
-    """A type `Dataclass` renders: a simple one, or a positional list of one."""
-    item = type_.get("indexed").get("item")
-    return _simple(type_).or_(type_.has("indexed").and_(type_.get("indexed").has("key").not_()).and_(_simple(item)))
+def _rendered(type_: E.Writer, depth: int = DEPTH) -> E.Writer:
+    """A type `Dataclass` renders: a simple one, or a list without an extent of one it renders, positional or keyed by a
+    basic native, nested `depth` deep at most."""
+    if depth == 0:
+        return _simple(type_)
+    indexed = type_.get("indexed")
+    keyed = indexed.has("key").not_().or_(_basic(indexed.get("key")))
+    return _simple(type_).or_(type_.has("indexed").and_(indexed.has("extent").not_()).and_(keyed).and_(
+        _rendered(indexed.get("item"), depth - 1)))
 
 
 def _over(symbols: dict[str, Any], constraint: Any) -> P.OfPredicate.Data:
     return P.OfPredicate.Builder().symbols(symbols).requires(constraint).create()
 
 
-_RENDERABLE = s.has("name").and_(s.has("parameters").not_()).and_(s.has("adjacencies").not_()).and_(
-    s.has("properties").not_().or_(s.get("properties").all("p", _rendered(p.get("type")))))
+_SPELLED = P.Exists(lambda q: q.symbols({"o": _OutputSchema}).requires(
+    s.get("name").in_(o.get("identifiers")).and_(s.has("properties").not_().or_(s.get("properties").all(
+        "p", p.get("name").in_(o.get("identifiers")).or_(p.get("name").in_(o.get("keywords"))))))))
+_RENDERABLE = E.operation("and", s.has("name").and_(s.has("parameters").not_()).and_(s.has("adjacencies").not_()).and_(
+    s.has("properties").not_().or_(s.get("properties").all("p", _rendered(p.get("type"))))), _SPELLED)
 _HAS_CLASS = P.Exists(lambda q: q.symbols({"c": Py.ClassDef.Schema}).requires(
     P.Contains(c.children, lambda e: e.property == "name" and e.child.spelling == s.name)))
 
@@ -119,9 +157,17 @@ def _name(builder: Any, spelling: str) -> Any:
 
 def _annotation(type_: Any) -> Any:
     """The annotation of a type `Dataclass` renders."""
+    if isinstance(type_, S.OfIndexed.Data) and type_.key is not None:
+        return lambda b: b.Subscript().value(lambda x: _name(x, "dict")).slice(
+            lambda x: x.Tuple().add_elts(_annotation(type_.key)).add_elts(_annotation(type_.item)))
     if isinstance(type_, S.OfIndexed.Data):
         return lambda b: b.Subscript().value(lambda x: _name(x, "list")).slice(_annotation(type_.item))
     return lambda b: _name(b, type_.token.name if type_.name is None else type_.name)
+
+
+def _field(name: str) -> str:
+    """A property's name as a field's: a keyword with a trailing underscore."""
+    return f"{name}_" if name in KEYWORDS else name
 
 
 def _quoted(text: str) -> str:
@@ -157,7 +203,7 @@ def _render(store: Stores.Combined, match: dict[str, Any], arguments: dict[str, 
     B = Py.LANGUAGE.Builders
     body = [B.Expr().value(lambda b: b.Constant().spelling(_quoted(schema.description))).create()] if (
         schema.description is not None) else []
-    body += [B.AnnAssign().target(lambda b, name=name: _name(b, name)).annotation(
+    body += [B.AnnAssign().target(lambda b, name=name: _name(b, _field(name))).annotation(
                  lambda b, type_=prop.type: b.BinOp().left(_annotation(type_)).op("|").right(
                      lambda x: x.Constant().spelling("None"))).value(lambda b: b.Constant().spelling("None")).create()
              for name, prop in schema.properties.items()]
@@ -203,15 +249,18 @@ def _spelling(node: Any) -> str:
 
 
 def _type(schemas: Stores.Store, annotation: Any, where: str) -> Any:
-    """The type an annotation `Dataclass` writes names: a basic native, a named schema, or a list of either."""
+    """The type an annotation `Dataclass` writes names: a basic native, a named schema, or a list or dict of them."""
     if isinstance(annotation, Py.Name):
         name = _spelling(annotation)
         return S.OfNative.Data({"bool": bool, "int": int, "float": float, "str": str, "bytes": bytes}[name]) if (
             name in NATIVES) else _named(schemas, name)
-    if isinstance(annotation, Py.Subscript) and isinstance(annotation.value, Py.Name) and (
-            _spelling(annotation.value) == "list"):
-        item = _type(schemas, annotation.slice, where)
-        return S.OfIndexed.Builder().of(item).create()
+    container = _spelling(annotation.value) if isinstance(annotation, Py.Subscript) and isinstance(
+        annotation.value, Py.Name) else None
+    if container == "list":
+        return S.OfIndexed.Builder().of(_type(schemas, annotation.slice, where)).create()
+    if container == "dict" and isinstance(annotation.slice, Py.Tuple) and len(annotation.slice.elts) == 2:
+        key, item = (_type(schemas, element, where) for element in annotation.slice.elts)
+        return S.OfIndexed.Builder().key(key).of(item).create()
     raise ValueError(f"{where}: cannot read the annotation {Python312.print(annotation).strip()}")
 
 
@@ -237,6 +286,11 @@ def _unquoted(spelling: str) -> str:
     return re.sub(r"\\(.)", lambda m: "\n" if m.group(1) == "n" else m.group(1), inner, flags=re.DOTALL)
 
 
+def _property(field: str) -> str:
+    """A field's name as a property's: a keyword's trailing underscore dropped."""
+    return field[:-1] if field.endswith("_") and field[:-1] in KEYWORDS else field
+
+
 def _keywords(decorator: Any) -> dict[str, str]:
     return {kw.arg.spelling: kw.value.spelling for kw in decorator.keywords} if isinstance(decorator, Py.Call) else {}
 
@@ -247,7 +301,8 @@ def _read_class(store: Stores.Combined, match: dict[str, Any], arguments: dict[s
     name = cls.name.spelling
     body = list(cls.body)
     docstring = body[0] if body and isinstance(body[0], Py.Expr) and isinstance(body[0].value, Py.Constant) else None
-    fields = [(_spelling(field.target), _type(schemas, _optional(field.annotation), f"{name}.{_spelling(field.target)}"))
+    fields = [(_property(_spelling(field.target)), _type(schemas, _optional(field.annotation),
+                                                         f"{name}.{_spelling(field.target)}"))
               for field in body if isinstance(field, Py.AnnAssign)]
     schema = _named(schemas, name)
     builder = S.OfObject.Builder(schema).properties(*[lambda q, f=f, y=y: q.name(f).of(y) for f, y in fields])
@@ -283,6 +338,13 @@ def read(module: Py.Module, schemas: Stores.Store | None = None) -> T.Session:
     session = T.Session(store(Proxies.OfStore() if schemas is None else schemas, module), list(FROM_PYTHON))
     session.run(T.Policy(T.Clause("Schema")))
     return session
+
+
+def missing(session: T.Session) -> list[Any]:
+    """The object schemas of a generation's store that no class renders, in name order: those `Dataclass` does not
+    render (see its before), whose names a field may still name (completeness, which mbse-patterns plans in general)."""
+    classes = {statement.name.spelling for statement in _module(session.store).body if isinstance(statement, Py.ClassDef)}
+    return [schema for schema in session.store.extent("Schemas.Object") if schema.name not in classes]
 
 
 def text(session: T.Session) -> str:

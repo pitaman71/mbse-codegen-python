@@ -30,19 +30,38 @@ import { ValueError } from "@mbse/schemas/Framework/Errors";
 export const OUTPUT = "Codegen.Output";
 /** The basic natives' tokens, which are also Python's names for them. */
 export const NATIVES = ["bool", "int", "float", "str", "bytes"];
+/** Python's keywords: a field so named is written with a trailing underscore (`from_`), and read back without it. */
+export const KEYWORDS = ["False", "None", "True", "and", "as", "assert", "async", "await", "break", "class", "continue",
+  "def", "del", "elif", "else", "except", "finally", "for", "from", "global", "if", "import", "in", "is", "lambda",
+  "nonlocal", "not", "or", "pass", "raise", "return", "try", "while", "with", "yield"];
+/** How deeply lists nest in a field's type (`list[list[int]]` is 2). */
+export const DEPTH = 4;
+const IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 export const Generated = new S.OfRelation.Builder().name("Codegen.Generated").links("output", "module").create();
-const OutputSchema = new S.OfObject.Builder().name(OUTPUT).ref().singleton(OUTPUT).relations(
-  (r) => r.name("modules").of(Generated).me("output")).create();
+const texts = (name: string) => (p: any) => p.name(name).of((t: any) => t.as_indexed((i: any) => i.of((x: any) => x.as_native(String))));
+const OutputSchema = new S.OfObject.Builder().name(OUTPUT).ref().singleton(OUTPUT).properties(texts("identifiers"),
+  texts("keywords")).relations((r) => r.name("modules").of(Generated).me("output")).create();
+
+function spellable(name: string | null): boolean {
+  return name !== null && IDENTIFIER.test(name) && !KEYWORDS.includes(name);
+}
 
 let outputs = 0;
 
-/** The output of a session: the module written or read. */
+/** The output of a session: the module written or read, and what Python can spell: `identifiers`, the names of the
+ * schemas and their properties that are Python identifiers and not keywords, and `keywords`. */
 export class Output {
   static Schema = OutputSchema;
   readonly #identity = `output ${++outputs}`;
 
-  constructor(public module: Py.Module | null = null) {}
+  constructor(public module: Py.Module | null = null, public schemas: Reflection.OfStore | null = null) {}
+
+  get identifiers(): string[] {
+    const names = this.schemas === null ? [] : this.schemas.schemas.flatMap((schema: any) =>
+      [schema.name, ...(schema.properties?.keys() ?? [])]);
+    return [...new Set(names.filter((name) => spellable(name)))].sort();
+  }
 
   identity(): string {
     return this.#identity;
@@ -62,7 +81,8 @@ export class Output {
 }
 
 const BINDING = new Bindings.Binding(OutputSchema,
-  (output: Output) => new Bindings.State(new Map(), new Map([["modules",
+  (output: Output) => new Bindings.State(new Map<string, unknown>([["identifiers", output.identifiers], ["keywords", KEYWORDS]]),
+    new Map([["modules",
     (output.module === null ? [] : [output.module]).map((m) => new Bindings.Entry(new Map([["module", m]])))]])),
   (state: Bindings.State) => new Output(...(state.entries.get("modules") ?? []).map((e) => e.links.get("module") as Py.Module)));
 
@@ -71,8 +91,10 @@ const BINDING = new Bindings.Binding(OutputSchema,
 export function store(schemas: Stores.Store, module: Py.Module): Stores.Combined {
   const outputs = new Bindings.OfStore([[OutputSchema, (instance?: Output) => new Bindings.Builder(BINDING, instance)]],
     [Generated]);
-  (outputs.singleton(OUTPUT) as unknown as Output).module = module;
-  return new Stores.Combined(Reflection.of(schemas), Py.LANGUAGE.Builders as never, outputs);
+  const reflected = Reflection.of(schemas);
+  const output = outputs.singleton(OUTPUT) as unknown as Output;
+  [output.module, output.schemas] = [module, reflected];
+  return new Stores.Combined(reflected, Py.LANGUAGE.Builders as never, outputs);
 }
 
 function moduleOf(store: Stores.Combined): Py.Module {
@@ -85,26 +107,38 @@ function schemasOf(store: Stores.Combined): Stores.Store {
 
 // --- Schemas to classes ---
 
-const [s, c, n, k, t, p] = [E.variable("s"), E.variable("c"), E.variable("n"), E.variable("k"), E.variable("t"),
-  E.variable("p")];
+const [s, c, n, k, t, p, o, x] = [E.variable("s"), E.variable("c"), E.variable("n"), E.variable("k"), E.variable("t"),
+  E.variable("p"), E.variable("o"), E.variable("x")];
 
-/** A basic native or a named schema. */
-function simple(type: E.Writer): E.Writer {
-  return type.get("native").get("format").eq("basic").or_(type.has("named"));
+function basic(type: E.Writer): E.Writer {
+  return type.get("native").get("format").eq("basic");
 }
 
-/** A type `Dataclass` renders: a simple one, or a positional list of one. */
-function rendered(type: E.Writer): E.Writer {
-  const item = type.get("indexed").get("item");
-  return simple(type).or_(type.has("indexed").and_(type.get("indexed").has("key").not_()).and_(simple(item)));
+/** A basic native, or a named object schema. */
+function simple(type: E.Writer): E.Writer {
+  const named = P.Exists((q) => q.symbols({ x: S.OfObject.Schema }).requires(x.get("name").eq(type.get("named").get("name"))));
+  return basic(type).or_(E.operation("and", type.has("named"), named));
+}
+
+/** A type `Dataclass` renders: a simple one, or a list without an extent of one it renders, positional or keyed by a
+ * basic native, nested `depth` deep at most. */
+function rendered(type: E.Writer, depth = DEPTH): E.Writer {
+  if (depth === 0) return simple(type);
+  const indexed = type.get("indexed");
+  const keyed = indexed.has("key").not_().or_(basic(indexed.get("key")));
+  return simple(type).or_(type.has("indexed").and_(indexed.has("extent").not_()).and_(keyed).and_(
+    rendered(indexed.get("item"), depth - 1)));
 }
 
 function over(symbols: Record<string, S.OfObject.Data>, constraint: unknown) {
   return new P.OfPredicate.Builder().symbols(symbols).requires(constraint as never).create();
 }
 
-const RENDERABLE = s.has("name").and_(s.has("parameters").not_()).and_(s.has("adjacencies").not_()).and_(
-  s.has("properties").not_().or_(s.get("properties").all("p", rendered(p.get("type")))));
+const SPELLED = P.Exists((q) => q.symbols({ o: OutputSchema }).requires(
+  s.get("name").in_(o.get("identifiers")).and_(s.has("properties").not_().or_(s.get("properties").all(
+    "p", p.get("name").in_(o.get("identifiers")).or_(p.get("name").in_(o.get("keywords"))))))));
+const RENDERABLE = E.operation("and", s.has("name").and_(s.has("parameters").not_()).and_(s.has("adjacencies").not_()).and_(
+  s.has("properties").not_().or_(s.get("properties").all("p", rendered(p.get("type"))))), SPELLED);
 const HAS_CLASS = P.Exists((q) => q.symbols({ c: Py.ClassDef.Schema }).requires(
   P.Contains(c.children, (e) => e.property.eq("name").and_(e.child.spelling.eq(s.name)))));
 
@@ -114,10 +148,19 @@ function name(builder: any, spelling: string): any {
 
 /** The annotation of a type `Dataclass` renders. */
 function annotation(type: any): (b: any) => any {
+  if (type instanceof S.OfIndexed.Data && type.key !== null) {
+    return (b) => b.Subscript().value((x: any) => name(x, "dict")).slice(
+      (x: any) => x.Tuple().add_elts(annotation(type.key)).add_elts(annotation(type.item)));
+  }
   if (type instanceof S.OfIndexed.Data) {
     return (b) => b.Subscript().value((x: any) => name(x, "list")).slice(annotation(type.item));
   }
   return (b) => name(b, type.name === null ? type.token.name : type.name);
+}
+
+/** A property's name as a field's: a keyword with a trailing underscore. */
+function field(named: string): string {
+  return KEYWORDS.includes(named) ? `${named}_` : named;
 }
 
 /** A string literal of `text`, in double quotes. */
@@ -150,8 +193,8 @@ function render(store: Stores.Combined, match: Record<string, unknown>, args: Re
   const B = Py.LANGUAGE.Builders as any;
   const body: Py.Statement[] = schema.description === null ? []
     : [B.Expr().value((b: any) => b.Constant().spelling(quoted(schema.description as string))).create()];
-  for (const [field, property] of schema.properties) {
-    body.push(B.AnnAssign().target((b: any) => name(b, field)).annotation((b: any) => b.BinOp().left(annotation(property.type))
+  for (const [named, property] of schema.properties) {
+    body.push(B.AnnAssign().target((b: any) => name(b, field(named))).annotation((b: any) => b.BinOp().left(annotation(property.type))
       .op("|").right((x: any) => x.Constant().spelling("None"))).value((b: any) => b.Constant().spelling("None")).create());
   }
   const built = B.ClassDef().name(schema.name).add_decorator_list(decorator(schema, args["frozen"] as boolean)).create();
@@ -195,15 +238,17 @@ function spelling(node: any): string {
   return node.id.spelling;
 }
 
-/** The type an annotation `Dataclass` writes names: a basic native, a named schema, or a list of either. */
+/** The type an annotation `Dataclass` writes names: a basic native, a named schema, or a list or dict of them. */
 function typeOf(schemas: Stores.Store, node: any, where: string): any {
   if (node instanceof Py.Name) {
     const named = spelling(node);
     return NATIVES.includes(named) ? S.OfNative.resolve((x) => x.token("basic", named)) : registered(schemas, named);
   }
-  if (node instanceof Py.Subscript && node.value instanceof Py.Name && spelling(node.value) === "list") {
-    const item = typeOf(schemas, node.slice, where);
-    return new S.OfIndexed.Builder().of(item).create();
+  const container = node instanceof Py.Subscript && node.value instanceof Py.Name ? spelling(node.value) : null;
+  if (container === "list") return new S.OfIndexed.Builder().of(typeOf(schemas, node.slice, where)).create();
+  if (container === "dict" && node.slice instanceof Py.Tuple && node.slice.elts.length === 2) {
+    const [key, item] = node.slice.elts.map((element: any) => typeOf(schemas, element, where));
+    return new S.OfIndexed.Builder().key(key).of(item).create();
   }
   throw new ValueError(`${where}: cannot read the annotation ${Python312.print(node).trim()}`);
 }
@@ -227,6 +272,11 @@ function unquoted(literal: string): string {
   return inner.replace(/\\(.)/gs, (_m, escaped: string) => escaped === "n" ? "\n" : escaped);
 }
 
+/** A field's name as a property's: a keyword's trailing underscore dropped. */
+function property(named: string): string {
+  return named.endsWith("_") && KEYWORDS.includes(named.slice(0, -1)) ? named.slice(0, -1) : named;
+}
+
 function keywords(node: any): Map<string, string> {
   return node instanceof Py.Call ? new Map(node.keywords.map((kw: any) => [kw.arg.spelling, kw.value.spelling])) : new Map();
 }
@@ -237,8 +287,9 @@ function readClass(store: Stores.Combined, match: Record<string, unknown>): void
   const named = cls.name.spelling as string;
   const body = [...cls.body];
   const docstring = body.length > 0 && body[0] instanceof Py.Expr && body[0].value instanceof Py.Constant ? body[0] : null;
-  const fields = body.filter((field) => field instanceof Py.AnnAssign).map((field: any) =>
-    [spelling(field.target), typeOf(schemas, optional(field.annotation), `${named}.${spelling(field.target)}`)] as [string, any]);
+  const fields = body.filter((statement) => statement instanceof Py.AnnAssign).map((statement: any) =>
+    [property(spelling(statement.target)), typeOf(schemas, optional(statement.annotation),
+      `${named}.${spelling(statement.target)}`)] as [string, any]);
   const schema = registered(schemas, named);
   let builder = new S.OfObject.Builder(schema).properties(...fields.map(([f, y]) => (q: any) => q.name(f).of(y)));
   if (cls.decorator_list.some((d: any) => keywords(d).get("eq") === "False")) builder = builder.ref();
@@ -271,6 +322,14 @@ export function read(module: Py.Module, schemas: Stores.Store | null = null): T.
   const session = new T.Session(store(schemas ?? new Proxies.OfStore(), module), [...FROM_PYTHON]);
   session.run(new T.Policy(new T.Clause("Schema")));
   return session;
+}
+
+/** The object schemas of a generation's store that no class renders, in name order: those `Dataclass` does not render
+ * (see its before), whose names a field may still name (completeness, which mbse-patterns plans in general). */
+export function missing(session: T.Session): any[] {
+  const classes = new Set(moduleOf(session.store as Stores.Combined).body.filter((statement) => statement instanceof Py.ClassDef)
+    .map((statement: any) => statement.name.spelling));
+  return [...session.store.extent("Schemas.Object")].filter((schema: any) => !classes.has(schema.name));
 }
 
 /** The source of a session's module, as Python 3.12 prints it. */
