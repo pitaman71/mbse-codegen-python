@@ -1,0 +1,50 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mbse-codegen-python"
+version = "0.1.0"
+description = "Schemas as idiomatic Python source and back: mbse-schemas' schemas rendered as dataclasses through mbse-programs' syntax trees, step by step, by mbse-patterns' transforms"
+keywords = ["code generation", "python", "dataclasses", "schemas", "mbse", "transforms"]
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = ["mbse-schemas>=0.8.1,<0.9", "mbse-expressions>=0.5.0,<0.6", "mbse-patterns>=0.7.4,<0.8",
+                "mbse-programs>=0.3.25,<0.4"]
+
+[tool.setuptools.package-data]
+"mbse.Codegen.Python" = ["skill/*.md", "skill/references/*.md"]
+
+[tool.setuptools.packages.find]
+include = ["mbse*"]
+namespaces = true
+
+[dependency-groups]
+dev = [
+    "coverage[toml]>=7.10",
+    "ipykernel>=7.3.0",
+    "nbformat>=5.11.1",
+    "nbmake>=1.5.5",
+    "pytest>=9.1.1",
+]
+
+[tool.uv.sources]
+mbse-schemas = { path = "../../mbse-schemas/python3", editable = true }  # the sibling checkouts: scripts/siblings.py
+mbse-expressions = { path = "../../mbse-expressions/python3", editable = true }
+mbse-patterns = { path = "../../mbse-patterns/python3", editable = true }
+mbse-programs = { path = "../../mbse-programs/python3", editable = true }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--nbmake"
+
+[tool.coverage.run]
+source = ["mbse.Codegen.Python"]
+branch = true
+parallel = true
+patch = ["subprocess"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
+fail_under = 100
