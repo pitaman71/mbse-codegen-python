@@ -117,8 +117,10 @@ check(proxy.items.map((entry: any) => entry.since).join() === "2020", "proxies")
    object schemas, or lists of them (`list[T]`, `dict[K, V]` keyed by a basic native, nested to any depth),
    without extents. Names are written as the schemas have them (a keyword property becomes `from_`): one Python cannot
    spell is in `Types.problems(session)`, and `Types.text(session)` raises `ValueError` while any remain. A reference
-   object schema is `@dataclass(eq=False)`; a description is the class's docstring. Every field is optional: `name: T | None
-   = None`. Classes are in name order. A relation is the class of its entries (`Entry`): a field per link, typed by the classes that declare it, then
+   object schema is `@dataclass(eq=False)`; a description is the class's docstring, and a singleton's name `SINGLETON`.
+   Every field is optional: `name: T | None = None`, its description in its metadata (`field(default=None,
+   metadata={"description": ...})`). Nothing is lost silently: what Python's types cannot hold (a native's width) has
+   no class, and `Types.missing(session)` says so. Classes are in name order. A relation is the class of its entries (`Entry`): a field per link, typed by the classes that declare it, then
    its properties, with class variables `LINKS` and `UNIQUES`; each adjacency, on both ends, is one field named after it
    holding its entries (`phones: tuple[Phones, ...] = ()`), so code reads proxies and generated classes alike
    (`for entry in contact.phones: entry.phone.number`). A named union or intersection is a value class of a dataclass

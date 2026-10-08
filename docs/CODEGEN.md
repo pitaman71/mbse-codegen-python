@@ -47,7 +47,8 @@ requires.
   A symbol binds a schema, never a property: a property is a value within a schema, read with `get`, quantified over
   (`s.get("properties").all(...)`) and compared deeply (mbse-expressions' Basic). A decision about one property, when
   there is one to take, will be a parameter of the schema's step.
-- **What renders**: a basic native as Python's name for it (`str`, `int`, `float`, `bool`, `bytes`), a named
+- **What renders**: a basic native as Python's name for it (`str`, `int`, `float`, `bool`, `bytes`), without a width
+  or a description of its own, which Python's type cannot hold, a named
   object schema, union or intersection by its name, a positional list as `list[...]` and a list keyed by a basic
   native as `dict[K, V]`, of any of these, nested to any depth: `Types.Rendered` is a predicate that applies itself to a
   list's item (mbse-patterns 0.8.2). A list with an extent has no Python form
@@ -86,7 +87,13 @@ requires.
 - **A field is optional**, as every property is (mbse-schemas: nothing is mandatory but by a constraint):
   `name: str | None = None`. `from __future__ import annotations` lets a field name a class defined later.
 - **A reference object schema compares by identity**: `@dataclass(eq=False)`, read back as `ref`. A schema's
-  description is the class's docstring, a string in double quotes.
+  description is the class's docstring, a string in double quotes, and a singleton's name its class variable
+  `SINGLETON` (`SINGLETON: ClassVar[str] = "Codegen.Output"`).
+- **Nothing is lost silently** (0.9.1). A property's, an adjacency's, a relation property's and a branch's or part's
+  description is its field's metadata (`field(default=None, metadata={"description": "digits"})`, beside an
+  adjacency's `"me"`); a flat union's branches' descriptions are its `Annotated` metadata's `"descriptions"`, and a
+  flat intersection's parts' its class variable `DESCRIPTIONS`, since no field holds a part. What Python's types cannot
+  hold (a native's width, a native's own description) has no class, and `missing` reports it.
 - **Classes are in name order**, wherever the steps that wrote them come in the trace, so the module does not depend
   on the order of the decisions; the imports come first, once.
 - **Names are matched by name.** After says "a class named after `s`" by its `name` child's spelling, since the
@@ -121,9 +128,11 @@ requires.
 - **Configuring names.** A name Python cannot spell is an error when the source is taken; a transform that offers a
   Python name as a parameter (the older adapter keeps a dotted name's last part) would let a person or a policy fix it
   within the session, recorded in the trace.
-- **Property descriptions** have no place in a dataclass field yet: a comment, or `Annotated[..., "..."]`.
 
 ## Resolved
+
+- Descriptions are field metadata (0.9.1), not comments or `Annotated` annotations: metadata reaches code at run
+  time (`dataclasses.fields`), as an adjacency's `"me"` already did, and leaves the annotation the type alone.
 
 - Codegen matches schemas through mbse-schemas' `Reflection.of(store)` (0.8), and compares what they hold with
   mbse-expressions' deep equality (0.5).

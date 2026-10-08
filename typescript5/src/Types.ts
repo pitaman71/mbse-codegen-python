@@ -10,7 +10,8 @@
  *   = ()`); its parameter `frozen` (a `bool`) is the decision. It applies where `s` is named, declares no parameters, every
  *   property's type renders (a basic native, a named object schema, or a list of them without an extent, positional or
  *   keyed by a basic native, nested to any depth) and every adjacency is to a named relation. A reference object schema
- *   compares by identity (`eq=False`), and a schema's description is the class's docstring. Where a schema declares
+ *   compares by identity (`eq=False`), a schema's description is the class's docstring, a singleton's name its
+ *   class variable `SINGLETON`, and a property's or an adjacency's description its field's metadata (`"description"`). Where a schema declares
  *   adjacencies via several links of one relation (a self-relation), each field's metadata names its link (`"me"`).
  * - `Union` and `Intersection` render a named union or intersection as a value class of a dataclass field per branch or
  *   part, each optional, as a proxy's union or intersection value reads it (`card.reach.email`); its class variable
@@ -109,8 +110,11 @@ const [s, c, n, k, t, p, x, r, a, b, u, y, w, d] = ["s", "c", "n", "k", "t", "p"
   .map((named) => E.variable(named)) as [E.Writer, E.Writer, E.Writer, E.Writer, E.Writer, E.Writer, E.Writer, E.Writer,
     E.Writer, E.Writer, E.Writer, E.Writer, E.Writer, E.Writer];
 
+/** A basic native, as Python writes it: without a width, parameters or a description, which `int` cannot hold. */
 function basic(type: E.Writer): E.Writer {
-  return type.get("native").get("format").eq("basic");
+  const native = type.get("native");
+  return native.get("format").eq("basic").and_(native.has("bits").not_()).and_(native.has("bytes").not_()).and_(
+    native.has("terms").not_()).and_(native.has("parameters").not_()).and_(native.has("description").not_());
 }
 
 /** A basic native, or a named object schema, union or intersection: each a class. */
@@ -242,10 +246,37 @@ function classVariable(named: string, depth: number, values: Texts[]): any {
 }
 
 /** `name: T | None = None`. */
-function optionalField(named: string, type: (b: any) => any): any {
+/** A field's default as it is, or, where it has metadata, `field(default=..., metadata={...})`. */
+function defaultOf(value: (b: any) => any, metadata: Record<string, MetadataValue>): (b: any) => any {
+  if (Object.keys(metadata).length === 0) return value;
+  return (b: any) => b.Call().func((x: any) => name(x, "field")).add_keywords((kw: any) => kw.arg("default").value(value))
+    .add_keywords((kw: any) => kw.arg("metadata").value(metadataLiteral(metadata)));
+}
+
+/** `name: T | None = None`, its description, where it has one, in its metadata. */
+function optionalField(named: string, type: (b: any) => any, description: string | null = null): any {
   return (Py.LANGUAGE.Builders as any).AnnAssign().target((b: any) => name(b, field(named))).annotation(
     (b: any) => b.BinOp().left(type).op("|").right((x: any) => x.Constant().spelling("None"))).value(
-    (b: any) => b.Constant().spelling("None")).create();
+    defaultOf((b: any) => b.Constant().spelling("None"), description === null ? {} : { description })).create();
+}
+
+/** `NAME: ClassVar[str] = "text"`. */
+function classText(named: string, text: string): any {
+  return (Py.LANGUAGE.Builders as any).AnnAssign().target((b: any) => name(b, named)).annotation(
+    (b: any) => b.Subscript().value((x: any) => name(x, "ClassVar")).slice((x: any) => name(x, "str"))).value(
+    (b: any) => b.Constant().spelling(quoted(text))).create();
+}
+
+/** Places a class in the module, with the imports it needs: `dataclass`, `field` and `ClassVar` where it uses them. */
+function finish(store: Stores.Combined, built: any): void {
+  const module = moduleOf(store);
+  require(module, "dataclasses", "dataclass");
+  const assigned = (built.body as any[]).filter((statement) => statement instanceof Py.AnnAssign);
+  if (assigned.some((statement) => statement.value instanceof Py.Call)) require(module, "dataclasses", "field");
+  if (assigned.some((statement) => statement.annotation instanceof Py.Subscript && spelling(statement.annotation.value) === "ClassVar")) {
+    require(module, "typing", "ClassVar");
+  }
+  place(module, built);
 }
 
 function docstring(description: string | null): any[] {
@@ -262,28 +293,22 @@ function declarers(objects: any[], relation: unknown, link: string): any[] {
 function render(store: Stores.Combined, match: Record<string, unknown>, args: Record<string, unknown>): void {
   const schema = match["s"] as S.OfObject.Data;
   const B = Py.LANGUAGE.Builders as any;
-  const body: any[] = [...docstring(schema.description),
-    ...[...schema.properties].map(([named, property]) => optionalField(named, annotation(property.type)))];
-  let needsField = false;
+  const body: any[] = [...docstring(schema.description), ...(schema.singleton === null ? [] : [classText("SINGLETON", schema.singleton)]),
+    ...[...schema.properties].map(([named, property]) => optionalField(named, annotation(property.type), property.description))];
   for (const [named, adjacency] of schema.adjacencies) {
     const relation = adjacency.relation as S.OfRelation.Data;
     const entries = (b: any) => b.Subscript().value((x: any) => name(x, "tuple")).slice((x: any) => x.Tuple().add_elts(
       (y: any) => name(y, relation.name as string)).add_elts((y: any) => y.Constant().spelling("...")));
-    const ambiguous = new Set([...schema.adjacencies.values()].filter((other) => other.relation === relation)
-      .map((other) => other.me)).size > 1;
-    const value = !ambiguous ? (b: any) => b.Tuple() : (b: any) => b.Call().func((x: any) => name(x, "field")).add_keywords(
-      (kw: any) => kw.arg("default").value((x: any) => x.Tuple())).add_keywords(
-      (kw: any) => kw.arg("metadata").value((x: any) => x.Dict().add_items(
-        (i: any) => i.key((k: any) => k.Constant().spelling('"me"')).value((v: any) => v.Constant().spelling(quoted(adjacency.me))))));
-    needsField ||= ambiguous;
-    body.push(B.AnnAssign().target((b: any) => name(b, field(named))).annotation(entries).value(value).create());
+    const metadata: Record<string, MetadataValue> = adjacency.description === null ? {} : { description: adjacency.description };
+    if (new Set([...schema.adjacencies.values()].filter((other) => other.relation === relation).map((other) => other.me)).size > 1) {
+      metadata["me"] = adjacency.me; // which link, where ambiguous
+    }
+    body.push(B.AnnAssign().target((b: any) => name(b, field(named))).annotation(entries).value(
+      defaultOf((b: any) => b.Tuple(), metadata)).create());
   }
   const built = B.ClassDef().name(schema.name).add_decorator_list(decorator(schema, args["frozen"] as boolean)).create();
   built.body = body.length > 0 ? body : [B.Pass().create()];
-  const module = moduleOf(store);
-  require(module, "dataclasses", "dataclass");
-  if (needsField) require(module, "dataclasses", "field");
-  place(module, built);
+  finish(store, built);
 }
 
 function renderEntry(store: Stores.Combined, match: Record<string, unknown>): void {
@@ -294,14 +319,11 @@ function renderEntry(store: Stores.Combined, match: Record<string, unknown>): vo
   const body = [...docstring(relation.description), classVariable("LINKS", 1, [...relation.links]),
     ...(uniques.length > 0 ? [classVariable("UNIQUES", 2, uniques)] : []),
     ...relation.links.map((link) => optionalField(link, union(declarers(objects, relation, link).map((o) => o.name)))),
-    ...[...relation.properties].map(([named, property]) => optionalField(named, annotation(property.type)))];
+    ...[...relation.properties].map(([named, property]) => optionalField(named, annotation(property.type), property.description))];
   const built = B.ClassDef().name(relation.name).add_decorator_list((b: any) => b.Call().func((x: any) => name(x, "dataclass"))
     .add_keywords((kw: any) => kw.arg("eq").value((x: any) => x.Constant().spelling("False")))).create();
   built.body = body;
-  const module = moduleOf(store);
-  require(module, "dataclasses", "dataclass");
-  require(module, "typing", "ClassVar");
-  place(module, built);
+  finish(store, built);
 }
 
 /** The name a class or a type alias defines, or null for another statement. */
@@ -378,6 +400,9 @@ function renderAlias(store: Stores.Combined, match: Record<string, unknown>): vo
   const names = (schema.branches as any[]).map((branch) => branch.name as string);
   if (names.join("\u0000") !== (schema.branches as any[]).map((branch) => convention(branch.type)).join("\u0000")) metadata["branches"] = names;
   if (schema.description !== null) metadata["description"] = schema.description;
+  const described = Object.fromEntries((schema.branches as any[]).filter((branch) => branch.description !== null)
+    .map((branch) => [branch.name, branch.description]));
+  if (Object.keys(described).length > 0) metadata["descriptions"] = described;
   const hasMetadata = Object.keys(metadata).length > 0;
   const value = !hasMetadata ? union : (b: any) => b.Subscript().value((x: any) => name(x, "Annotated")).slice(
     (x: any) => x.Tuple().add_elts(union).add_elts(metadataLiteral(metadata)));
@@ -390,9 +415,7 @@ function renderVariants(kind: string) {
   return (store: Stores.Combined, match: Record<string, unknown>, args: Record<string, unknown>): void => {
     const schema = match["s"] as any;
     const B = Py.LANGUAGE.Builders as any;
-    const body = [...docstring(schema.description), B.AnnAssign().target((b: any) => name(b, "KIND")).annotation(
-      (b: any) => b.Subscript().value((x: any) => name(x, "ClassVar")).slice((x: any) => name(x, "str"))).value(
-      (b: any) => b.Constant().spelling(quoted(kind))).create()];
+    const body = [...docstring(schema.description), classText("KIND", kind)];
     let members = schema[MEMBERS[kind] as string] as any[];
     if (schema.flat) { // an intersection's parts' properties as its own, and which part each is from
       const parts = members.map((part): [string, string | string[]] => [part.name,
@@ -404,15 +427,19 @@ function renderVariants(kind: string) {
         (b: any) => parts.reduce((built: any, [part, held]) => built.add_items((i: any) => i.key(
           (k: any) => k.Constant().spelling(quoted(part))).value(typeof held === "string"
             ? (v: any) => v.Constant().spelling(quoted(held)) : (v: any) => v.Parenthesized().value(strings(held)))), b.Dict())).create());
+      const described = Object.fromEntries(members.filter((part) => part.description !== null).map((part) => [part.name, part.description]));
+      if (Object.keys(described).length > 0) { // the parts' own descriptions, which no field holds
+        body.push(B.AnnAssign().target((b: any) => name(b, "DESCRIPTIONS")).annotation(
+          (b: any) => b.Subscript().value((x: any) => name(x, "ClassVar")).slice((x: any) => x.Subscript().value(
+            (y: any) => name(y, "dict")).slice((y: any) => y.Tuple().add_elts((z: any) => name(z, "str")).add_elts(
+            (z: any) => name(z, "str"))))).value(metadataLiteral(described)).create());
+      }
       members = members.flatMap((part) => [...(S.structure(part.type) as any).properties.values()]);
     }
-    body.push(...members.map((member) => optionalField(member.name, annotation(member.type))));
+    body.push(...members.map((member) => optionalField(member.name, annotation(member.type), member.description)));
     const built = B.ClassDef().name(schema.name).add_decorator_list(decorator(schema, args["frozen"] as boolean)).create();
     built.body = body;
-    const module = moduleOf(store);
-    require(module, "dataclasses", "dataclass");
-    require(module, "typing", "ClassVar");
-    place(module, built);
+    finish(store, built);
   };
 }
 
@@ -466,10 +493,16 @@ const UNEQUAL = P.Exists((q) => q.symbols({ k: Py.Call.Schema, w: Py.Keyword.Sch
 const DOCUMENTED = P.Exists((q) => q.symbols({ d: Py.Expr.Schema }).requires(
   P.Contains(c.children, (e) => e.property.eq("body").and_(e.index.eq(0n)).and_(e.child.eq(d)))).requires(
   P.Contains(d.children, (e) => e.property.eq("value").and_(e.child.kind.eq("Constant")))));
-const COUNTED = t.has("properties").and_(t.has("adjacencies")).and_(PROPERTIES.add(ADJACENCIES).eq(FIELDS)).or_(
-  t.has("properties").and_(t.has("adjacencies").not_()).and_(PROPERTIES.eq(FIELDS))).or_(
-  t.has("properties").not_().and_(t.has("adjacencies")).and_(ADJACENCIES.eq(FIELDS))).or_(
-  t.has("properties").not_().and_(t.has("adjacencies").not_()).and_(FIELDS.eq(0n)));
+/** Whether the object schema `t` has a property or an adjacency per field. */
+function counted(fields: E.Writer): E.Writer {
+  return t.has("properties").and_(t.has("adjacencies")).and_(PROPERTIES.add(ADJACENCIES).eq(fields)).or_(
+    t.has("properties").and_(t.has("adjacencies").not_()).and_(PROPERTIES.eq(fields))).or_(
+    t.has("properties").not_().and_(t.has("adjacencies")).and_(ADJACENCIES.eq(fields))).or_(
+    t.has("properties").not_().and_(t.has("adjacencies").not_()).and_(fields.eq(0n)));
+}
+
+/** Whether `t` has a property or an adjacency per field of `c`, its `SINGLETON` aside. */
+const COUNTED = t.has("singleton").and_(counted(FIELDS.sub(1n))).or_(t.has("singleton").not_().and_(counted(FIELDS)));
 /** Whether the class `c` has been read: an object schema named after it, a reference object's where `c` is
  * `eq=False`, described where it has a docstring, with a property or an adjacency per field; or a relation named after
  * it, with its links; or a union or an intersection named after it, with its members. */
@@ -545,15 +578,29 @@ function keywords(node: any): Map<string, string> {
 }
 
 /** The values of a class's `ClassVar`s, by name: tuples of text, or of tuples of text. */
+/** The value of a literal the steps write: text, or a tuple, list or dict of literals. */
+function literal(node: any): any {
+  const inner = node instanceof Py.Parenthesized ? node.value : node;
+  if (inner instanceof Py.Dict) return Object.fromEntries(inner.items.map((item: any) => [literal(item.key), literal(item.value)]));
+  return inner instanceof Py.Tuple || inner instanceof Py.List ? inner.elts.map(literal) : unquoted(inner.spelling);
+}
+
+/** A field's metadata: `field(..., metadata={...})`'s, or none. */
+function fieldMetadata(statement: any): Record<string, any> {
+  if (!(statement.value instanceof Py.Call)) return {};
+  const found = statement.value.keywords.find((kw: any) => kw.arg.spelling === "metadata");
+  return found === undefined ? {} : literal(found.value);
+}
+
+function withDescription(builder: any, description: string | null | undefined): any {
+  return description === null || description === undefined ? builder : builder.description(description);
+}
+
+/** The values of a class's `ClassVar`s, by name: text, or tuples, lists and dicts of them. */
 function classVariables(cls: any): Map<string, any> {
-  const value = (node: any): any => {
-    const inner = node instanceof Py.Parenthesized ? node.value : node;
-    if (inner instanceof Py.Dict) return Object.fromEntries(inner.items.map((item: any) => [value(item.key), value(item.value)]));
-    return inner instanceof Py.Tuple || inner instanceof Py.List ? inner.elts.map(value) : unquoted(inner.spelling);
-  };
   return new Map(cls.body.filter((statement: any) => statement instanceof Py.AnnAssign && statement.annotation instanceof Py.Subscript
     && statement.annotation.value instanceof Py.Name && spelling(statement.annotation.value) === "ClassVar")
-    .map((statement: any) => [spelling(statement.target), value(statement.value)]));
+    .map((statement: any) => [spelling(statement.target), literal(statement.value)]));
 }
 
 /** A class's fields: its annotated names but its `ClassVar`s. */
@@ -583,10 +630,8 @@ function entriesOf(node: any): string | null {
 
 /** The link an adjacency field is from: its metadata's `me`, else the one link of its entry class typed by the owner. */
 function meOf(module: Py.Module, owner: string, statement: any, relation: string, where: string): string {
-  if (statement.value instanceof Py.Call) {
-    const metadata = statement.value.keywords.find((kw: any) => kw.arg.spelling === "metadata").value;
-    return unquoted(metadata.items.find((item: any) => unquoted(item.key.spelling) === "me").value.spelling);
-  }
+  const me = fieldMetadata(statement)["me"];
+  if (me !== undefined) return me;
   const entry = entryClass(module, relation);
   const links: string[] = entry !== undefined ? classVariables(entry).get("LINKS") : [];
   const typed = (entry !== undefined ? fieldsOf(entry) : []).map((item: any) => [spelling(item.target), item] as [string, any])
@@ -613,7 +658,7 @@ function readEntry(schemas: Stores.Store, module: Py.Module, cls: any): void {
   const links = variables.get("LINKS") as string[];
   const properties = fieldsOf(cls).filter((item: any) => !links.includes(spelling(item.target))).map((item: any) => {
     const type = typeOf(schemas, optional(item.annotation), `${named}.${spelling(item.target)}`, module);
-    return (q: any) => q.name(property(spelling(item.target))).of(type);
+    return (q: any) => withDescription(q.name(property(spelling(item.target))).of(type), fieldMetadata(item)["description"]);
   });
   let builder = ((variables.get("UNIQUES") ?? []) as string[][]).reduce((built: any, unique) => built.unique(...unique),
     new S.OfRelation.Builder(schemas.registered(named) as never).links(...links).properties(...properties));
@@ -627,12 +672,14 @@ function readVariants(schemas: Stores.Store, module: Py.Module, cls: any, kind: 
   const named = cls.name.spelling as string;
   const typed = new Map(fieldsOf(cls).map((item: any) => [property(spelling(item.target)),
     typeOf(schemas, optional(item.annotation), `${named}.${spelling(item.target)}`, module)]));
+  const notes = new Map(fieldsOf(cls).map((item: any) => [property(spelling(item.target)), fieldMetadata(item)["description"]]));
   const parts = classVariables(cls).get("PARTS") as Record<string, string | string[]> | undefined;
-  const members = parts === undefined ? [...typed].map(([f, type]) => (q: any) => q.name(f).of(type))
+  const own = (classVariables(cls).get("DESCRIPTIONS") ?? {}) as Record<string, string>;
+  const members = parts === undefined ? [...typed].map(([f, type]) => (q: any) => withDescription(q.name(f).of(type), notes.get(f)))
     : Object.entries(parts).map(([part, held]) => {
       const type = typeof held === "string" ? registered(schemas, held, module, `${named}.PARTS`)
-        : new S.OfObject.Builder().properties(...held.map((g) => (r: any) => r.name(g).of(typed.get(g)))).create();
-      return (q: any) => q.name(part).of(type);
+        : new S.OfObject.Builder().properties(...held.map((g) => (r: any) => withDescription(r.name(g).of(typed.get(g)), notes.get(g)))).create();
+      return (q: any) => withDescription(q.name(part).of(type), own[part]);
     });
   const data = registered(schemas, named, module);
   let builder: any = kind === "union" ? new S.OfUnion.Builder(data).branches(...members)
@@ -663,16 +710,19 @@ function readClass(store: Stores.Combined, match: Record<string, unknown>): void
   for (const statement of fieldsOf(cls)) {
     const [fieldName, where] = [property(spelling(statement.target)), `${named}.${spelling(statement.target)}`];
     const relationName = entriesOf(statement.annotation);
+    const description = fieldMetadata(statement)["description"];
     if (relationName === null) {
       const type = typeOf(schemas, optional(statement.annotation), where, module);
-      properties.push((q: any) => q.name(fieldName).of(type));
+      properties.push((q: any) => withDescription(q.name(fieldName).of(type), description));
     } else {
       const relation = relationOf(schemas, module, relationName, where);
       const me = meOf(module, named, statement, relationName, where);
-      adjacencies.push((q: any) => q.name(fieldName).of(relation).me(me));
+      adjacencies.push((q: any) => withDescription(q.name(fieldName).of(relation).me(me), description));
     }
   }
   let builder = new S.OfObject.Builder(registered(schemas, named, module)).properties(...properties).relations(...adjacencies);
+  const singleton = classVariables(cls).get("SINGLETON");
+  if (singleton !== undefined) builder = builder.singleton(singleton);
   if (cls.decorator_list.some((decorated: any) => keywords(decorated).get("eq") === "False")) builder = builder.ref();
   const described = docstringOf(cls);
   if (described !== null) builder = builder.description(described);
@@ -697,14 +747,14 @@ function readAlias(store: Stores.Combined, match: Record<string, unknown>): void
   if (value instanceof Py.Subscript && value.value instanceof Py.Name && spelling(value.value) === "Annotated") {
     const [union, held] = (value.slice as any).elts;
     value = union;
-    metadata = Object.fromEntries(held.items.map((item: any) => [unquoted(item.key.spelling), item.value instanceof Py.Constant
-      ? unquoted(item.value.spelling) : item.value.elts.map((e: any) => unquoted(e.spelling))]));
+    metadata = literal(held);
   }
   const nodes = branchesOf(value);
   const names: string[] = metadata["branches"] ?? nodes.map(namedConvention);
+  const notes: Record<string, string> = metadata["descriptions"] ?? {};
   let builder: any = new S.OfUnion.Builder(registered(schemas, named, module)).branches(...nodes.map((node, i) => {
     const type = typeOf(schemas, node, `${named}.${names[i]}`, module);
-    return (q: any) => q.name(names[i]).of(type);
+    return (q: any) => withDescription(q.name(names[i]).of(type), notes[names[i] as string]);
   })).flat();
   if (metadata["description"] !== undefined) builder = builder.description(metadata["description"]);
   builder.update();

@@ -18,7 +18,7 @@ bridge also **reads back**: Python's form holds what the schema holds, the step'
 |---|---|
 | Enumerate the feasible bridges, useful and deterministic | Not done up front: bridges were added one by one (0.1–0.8). This document does it now |
 | Document the algorithm as transform steps | Done for the built bridges: [CODEGEN.md, Transforms](CODEGEN.md#transforms) |
-| Capture each ambiguity as a parameter of its step | Partly: `frozen` is the one parameter. Other choices were made once for every schema (a tuple for entries, `\| None = None`, `from_`), and some left the output silently (below) |
+| Capture each ambiguity as a parameter of its step | Partly: `frozen` is the one parameter. Other choices were made once for every schema (a tuple for entries, `\| None = None`, `from_`), and some left the output silently until 0.9.1 (below) |
 | Dataclasses, with builders and visitors, for every step type | Generic: a step type is an mbse-patterns `Transform` whose parameters are `OfParameter`s. A step and a trace are schema-driven data. There is no dataclass per step type |
 | A stepwise-forward procedure | Done: mbse-patterns' `Session` |
 | The caller iterates the next possible steps | Done: `session.candidates()` |
@@ -27,13 +27,15 @@ bridge also **reads back**: Python's form holds what the schema holds, the step'
 | The trace keeps the order, and role-specific links to source and target elements | Half done: a step keeps its order and its source elements by symbol (`s=Contact`), but nothing links it to the target elements it wrote (the class, the alias) |
 | Policies reduce or remove interactive choices | Done: `Policy`, `Clause`, `Types.PLAIN` |
 
-## Silent losses today
+## Silent losses
 
-These break CODEGEN.md's own "no silent loss" decision. Each gets a class or a field anyway, `missing` does not
-report it, and reading back does not restore it:
+Until 0.9.1 these broke CODEGEN.md's own "no silent loss" decision: each got a class or a field anyway, `missing` did
+not report it, and reading back did not restore it. 0.9.1 writes and reads each, or leaves the schema without a class:
 
-- an object schema's **singleton** name;
-- the **description** of a property, a relation's property, a branch or a part, and an adjacency.
+- an object schema's **singleton** name, now `SINGLETON`;
+- the **description** of a property, a relation's property, a branch or a part, and an adjacency, now field metadata
+  (and, where no field holds it, `Annotated` metadata or `DESCRIPTIONS`);
+- a native's **width** or its own description, which `int` cannot hold: now no class, reported by `missing`.
 
 ## Natives
 
@@ -42,7 +44,7 @@ report it, and reading back does not restore it:
 | Basic native (`bool`, `int`, `float`, `str`, `bytes`) | Python's own type | none | built |
 | `python3` token of a basic native | the same type; reads back as `basic` | none (both tokens map to one host type) | feasible: it is refused today. Reading back cannot tell the two apart, so the format would go in metadata |
 | Native of another format (`ccpp` `int32_t`, `typescript5` `number`) | a basic Python type, the token kept in metadata: `Annotated[int, {"native": ["ccpp", "int32_t"]}]` | `host`: which basic type. A policy may hold a table of them | feasible |
-| Width in bits or bytes, an int | metadata: `Annotated[int, {"bits": 32}]` | none | feasible |
+| Width in bits or bytes, an int | metadata: `Annotated[int, {"bits": 32}]` | none | feasible: no class today (was lost until 0.9.1) |
 | Width as a term | the term, rendered by `Codegen/Expressions` | | waits on Codegen/Expressions |
 | Named native (`Word`) | `type Word = str`, its description in `Annotated` metadata | `form`: a type alias, or `NewType("Word", str)`, which code must construct | feasible |
 
@@ -52,13 +54,13 @@ report it, and reading back does not restore it:
 |---|---|---|---|
 | Named value object schema | `@dataclass` class | `frozen` | built |
 | Named reference object schema | `@dataclass(eq=False)` | `frozen` | built |
-| Singleton | `SINGLETON: ClassVar[str] = "Codegen.Output"` | none | **lost today** |
+| Singleton | `SINGLETON: ClassVar[str] = "Codegen.Output"` | none | built (0.9.1) |
 | Description | the class's docstring | none | built |
 | Property | field `name: T \| None = None` | none | built |
 | Property named by a keyword | `from_`, read back without the underscore | none | built |
-| Property's description | `field(default=None, metadata={"description": ...})`, as an adjacency's `"me"` | none | **lost today** |
+| Property's description | `field(default=None, metadata={"description": ...})`, as an adjacency's `"me"` | none | built (0.9.1) |
 | Adjacency | one field holding its entries: `phones: tuple[Phones, ...] = ()` | `container`: a tuple, a list, or a set sorted by a comparator. Today it is always a tuple | built, without the parameter |
-| Adjacency's description | in the field's metadata | none | **lost today** |
+| Adjacency's description | in the field's metadata | none | built (0.9.1) |
 | Inline object schema as a property's type | a class nested in its owner (`Contact.Address`) | `name`: Python needs one, by default the property's name in CamelCase | feasible: no candidate today |
 | Anonymous adjacency (the TODO's: participation without storage) | no field. A class variable may list them | | waits on mbse-schemas |
 
@@ -67,7 +69,7 @@ report it, and reading back does not restore it:
 | Construct | Python bridge | Ambiguity, as a parameter | Status |
 |---|---|---|---|
 | Named relation | entry class: a field per link, then its properties; `LINKS`, `UNIQUES` | none | built |
-| Relation's property description | in the field's metadata, as an object's | none | **lost today** |
+| Relation's property description | in the field's metadata, as an object's | none | built (0.9.1) |
 | Self-relation adjacencies | `field(default=(), metadata={"me": ...})` | none | built |
 | Unnamed relation | an entry class needs a name | `name` | feasible: no candidate today |
 
@@ -79,7 +81,7 @@ report it, and reading back does not restore it:
 | Flat union (the schema's configuration) | `type X = A \| B`, names and description in `Annotated` | none | built |
 | Named intersection | value class, a field per part | `frozen` | built |
 | Flat intersection | class of its parts' properties, `PARTS` | `frozen` | built |
-| Branch's or part's description | field metadata; in a flat union, `Annotated` metadata | none | **lost today** |
+| Branch's or part's description | field metadata; in a flat union, `Annotated` metadata; in a flat intersection, `DESCRIPTIONS` | none | built (0.9.1) |
 | Inline union or intersection as a property's type | a nested class, or a nested alias | `name`, as for an inline object | feasible: no candidate today |
 | Branch of an inline type | a nested class of the union | `name` | feasible: no candidate today |
 
@@ -124,8 +126,8 @@ report it, and reading back does not restore it:
 
 1. **Recursive predicates** (mbse-patterns 0.8.2, done): a predicate applies itself, so whether a type renders is one
    recursive predicate, and `DEPTH` is gone.
-2. **No silent loss**: the singleton and every description. These are small, have no parameter, and are needed before
-   claiming round trips. The tests then cover every row that is built.
+2. **No silent loss** (0.9.1, done): the singleton and every description, written and read back, and widths left
+   without a class.
 3. **Target links in the trace** (mbse-patterns): each step links to the elements it wrote, by role, as the process
    requires.
 4. The deterministic rows without parameters: named natives and lists as aliases, widths, extents with int bounds,

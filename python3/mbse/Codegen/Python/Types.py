@@ -9,7 +9,8 @@ singleton `Codegen.Output` holds the module written or read. Each step is one de
   = ()`); its parameter `frozen` (a `bool`) is the decision. It applies where `s` is named, declares no parameters, every
   property's type renders (a basic native, a named object schema, or a list of them without an extent, positional or
   keyed by a basic native, nested to any depth) and every adjacency is to a named relation. A reference object schema
-  compares by identity (`eq=False`), and a schema's description is the class's docstring. Where a schema declares
+  compares by identity (`eq=False`), a schema's description is the class's docstring, a singleton's name its
+  class variable `SINGLETON`, and a property's or an adjacency's description its field's metadata (`"description"`). Where a schema declares
   adjacencies via several links of one relation (a self-relation), each field's metadata names its link (`"me"`).
 - `Union` and `Intersection` render a named union or intersection as a value class of a dataclass field per branch or
   part, each optional, as a proxy's union or intersection value reads it (`card.reach.email`); its class variable
@@ -116,7 +117,10 @@ s, c, n, k, t, p, x, r, a, b, u, y, w, d = (E.variable(name) for name in (
 
 
 def _basic(type_: E.Writer) -> E.Writer:
-    return type_.get("native").get("format").eq("basic")
+    """A basic native, as Python writes it: without a width, parameters or a description, which `int` cannot hold."""
+    native = type_.get("native")
+    return native.get("format").eq("basic").and_(native.has("bits").not_()).and_(native.has("bytes").not_()).and_(
+        native.has("terms").not_()).and_(native.has("parameters").not_()).and_(native.has("description").not_())
 
 
 def _simple(type_: E.Writer) -> E.Writer:
@@ -251,11 +255,39 @@ def _class_variable(name: str, depth: int, values: list[Any]) -> Any:
         lambda b: b.Parenthesized().value(_strings(values))).create()
 
 
-def _optional_field(name: str, annotation: Any) -> Any:
-    """`name: T | None = None`."""
+def _default(default: Any, metadata: dict[str, Any]) -> Any:
+    """A field's default as it is, or, where it has metadata, `field(default=..., metadata={...})`."""
+    if not metadata:
+        return default
+    return lambda b: b.Call().func(lambda x: _name(x, "field")).add_keywords(
+        lambda kw: kw.arg("default").value(default)).add_keywords(lambda kw: kw.arg("metadata").value(_metadata(metadata)))
+
+
+def _optional_field(name: str, annotation: Any, description: str | None = None) -> Any:
+    """`name: T | None = None`, its description, where it has one, in its metadata."""
     return Py.LANGUAGE.Builders.AnnAssign().target(lambda b: _name(b, _field(name))).annotation(
         lambda b: b.BinOp().left(annotation).op("|").right(lambda x: x.Constant().spelling("None"))).value(
-        lambda b: b.Constant().spelling("None")).create()
+        _default(lambda b: b.Constant().spelling("None"), {} if description is None else {"description": description})).create()
+
+
+def _class_text(name: str, text: str) -> Any:
+    """`NAME: ClassVar[str] = "text"`."""
+    return Py.LANGUAGE.Builders.AnnAssign().target(lambda b: _name(b, name)).annotation(
+        lambda b: b.Subscript().value(lambda x: _name(x, "ClassVar")).slice(lambda x: _name(x, "str"))).value(
+        lambda b: b.Constant().spelling(_quoted(text))).create()
+
+
+def _finish(store: Stores.Combined, built: Any) -> None:
+    """Places a class in the module, with the imports it needs: `dataclass`, `field` and `ClassVar` where it uses them."""
+    module = _module(store)
+    _require(module, "dataclasses", "dataclass")
+    assigned = [statement for statement in built.body if isinstance(statement, Py.AnnAssign)]
+    if any(isinstance(statement.value, Py.Call) for statement in assigned):
+        _require(module, "dataclasses", "field")
+    if any(isinstance(statement.annotation, Py.Subscript) and _spelling(statement.annotation.value) == "ClassVar"
+           for statement in assigned):
+        _require(module, "typing", "ClassVar")
+    _place(module, built)
 
 
 def _docstring(description: str | None) -> list[Any]:
@@ -271,30 +303,20 @@ def _declarers(objects: list[Any], relation: Any, link: str) -> list[Any]:
 def _render(store: Stores.Combined, match: dict[str, Any], arguments: dict[str, Any]) -> None:
     schema = match["s"]
     B = Py.LANGUAGE.Builders
-    body = _docstring(schema.description) + [_optional_field(name, _annotation(prop.type))
-                                             for name, prop in schema.properties.items()]
-    needs_field = False
+    body = _docstring(schema.description) + ([] if schema.singleton is None else [_class_text("SINGLETON", schema.singleton)])
+    body += [_optional_field(name, _annotation(prop.type), prop.description) for name, prop in schema.properties.items()]
     for name, adjacency in schema.adjacencies.items():
         relation = adjacency.relation
         entries = lambda b, relation=relation: b.Subscript().value(lambda x: _name(x, "tuple")).slice(  # noqa: E731
             lambda x: x.Tuple().add_elts(lambda y: _name(y, relation.name)).add_elts(lambda y: y.Constant().spelling("...")))
-        ambiguous = len({a.me for a in schema.adjacencies.values() if a.relation is relation}) > 1
-        default = (lambda b: b.Tuple()) if not ambiguous else (
-            lambda b, me=adjacency.me: b.Call().func(lambda x: _name(x, "field")).add_keywords(
-                lambda kw: kw.arg("default").value(lambda x: x.Tuple())).add_keywords(
-                lambda kw: kw.arg("metadata").value(lambda x: x.Dict().add_items(
-                    lambda i: i.key(lambda k: k.Constant().spelling('"me"')).value(
-                        lambda v: v.Constant().spelling(_quoted(me)))))))
-        needs_field = needs_field or ambiguous
+        metadata = {} if adjacency.description is None else {"description": adjacency.description}
+        if len({a.me for a in schema.adjacencies.values() if a.relation is relation}) > 1:  # which link, where ambiguous
+            metadata["me"] = adjacency.me
         body.append(B.AnnAssign().target(lambda b, name=name: _name(b, _field(name))).annotation(entries).value(
-            default).create())
+            _default(lambda b: b.Tuple(), metadata)).create())
     built = B.ClassDef().name(schema.name).add_decorator_list(_decorator(schema, arguments["frozen"])).create()
     built.body = body or [B.Pass().create()]
-    module = _module(store)
-    _require(module, "dataclasses", "dataclass")
-    if needs_field:
-        _require(module, "dataclasses", "field")
-    _place(module, built)
+    _finish(store, built)
 
 
 def _render_entry(store: Stores.Combined, match: dict[str, Any], arguments: dict[str, Any]) -> None:
@@ -306,15 +328,12 @@ def _render_entry(store: Stores.Combined, match: dict[str, Any], arguments: dict
     body += [_class_variable("UNIQUES", 2, uniques)] if uniques else []
     body += [_optional_field(link, _union([o.name for o in _declarers(objects, relation, link)]))
              for link in relation.links]
-    body += [_optional_field(name, _annotation(prop.type)) for name, prop in relation.properties.items()]
+    body += [_optional_field(name, _annotation(prop.type), prop.description) for name, prop in relation.properties.items()]
     built = B.ClassDef().name(relation.name).add_decorator_list(
         lambda b: b.Call().func(lambda x: _name(x, "dataclass")).add_keywords(
             lambda kw: kw.arg("eq").value(lambda x: x.Constant().spelling("False")))).create()
     built.body = body
-    module = _module(store)
-    _require(module, "dataclasses", "dataclass")
-    _require(module, "typing", "ClassVar")
-    _place(module, built)
+    _finish(store, built)
 
 
 def _defined(statement: Any) -> str | None:
@@ -397,6 +416,9 @@ def _render_alias(store: Stores.Combined, match: dict[str, Any], arguments: dict
         metadata["branches"] = [branch.name for branch in schema.branches]
     if schema.description is not None:
         metadata["description"] = schema.description
+    described = {branch.name: branch.description for branch in schema.branches if branch.description is not None}
+    if described:
+        metadata["descriptions"] = described
     value = union if not metadata else lambda b: b.Subscript().value(lambda x: _name(x, "Annotated")).slice(
         lambda x: x.Tuple().add_elts(union).add_elts(_metadata(metadata)))
     module = _module(store)
@@ -410,9 +432,7 @@ def _render_variants(kind: str) -> Any:
         schema = match["s"]
         B = Py.LANGUAGE.Builders
         members = getattr(schema, _MEMBERS[kind])
-        body = _docstring(schema.description) + [Py.LANGUAGE.Builders.AnnAssign().target(lambda b: _name(b, "KIND")).annotation(
-            lambda b: b.Subscript().value(lambda x: _name(x, "ClassVar")).slice(lambda x: _name(x, "str"))).value(
-            lambda b: b.Constant().spelling(_quoted(kind))).create()]
+        body = _docstring(schema.description) + [_class_text("KIND", kind)]
         if schema.flat:  # an intersection's parts' properties as its own, and which part each is from
             parts = {part.name: part.type.name if part.type.name is not None else list(part.type.properties)
                      for part in members}
@@ -424,14 +444,17 @@ def _render_variants(kind: str) -> Any:
                     lambda k: k.Constant().spelling(_quoted(item[0]))).value(
                     (lambda v: v.Constant().spelling(_quoted(item[1]))) if isinstance(item[1], str) else
                     (lambda v: v.Parenthesized().value(_strings(item[1]))))), parts.items(), b.Dict())).create())
+            described = {part.name: part.description for part in members if part.description is not None}
+            if described:  # the parts' own descriptions, which no field holds
+                body.append(B.AnnAssign().target(lambda b: _name(b, "DESCRIPTIONS")).annotation(
+                    lambda b: b.Subscript().value(lambda x: _name(x, "ClassVar")).slice(lambda x: x.Subscript().value(
+                        lambda y: _name(y, "dict")).slice(lambda y: y.Tuple().add_elts(lambda z: _name(z, "str")).add_elts(
+                            lambda z: _name(z, "str"))))).value(_metadata(described)).create())
             members = [prop for part in members for prop in S.structure(part.type).properties.values()]
-        body += [_optional_field(member.name, _annotation(member.type)) for member in members]
+        body += [_optional_field(member.name, _annotation(member.type), member.description) for member in members]
         built = B.ClassDef().name(schema.name).add_decorator_list(_decorator(schema, arguments["frozen"])).create()
         built.body = body
-        module = _module(store)
-        _require(module, "dataclasses", "dataclass")
-        _require(module, "typing", "ClassVar")
-        _place(module, built)
+        _finish(store, built)
     return render
 
 
@@ -486,10 +509,18 @@ _DOCUMENTED = P.Exists(lambda q: q.symbols({"d": Py.Expr.Schema}).requires(
     P.Contains(c.children, lambda e: e.property == "body" and e.index == 0 and e.child == d)).requires(
     P.Contains(d.children, lambda e: e.property == "value" and e.child.kind == "Constant")))
 """Whether the class `c` has a docstring."""
-_COUNTED = t.has("properties").and_(t.has("adjacencies")).and_(_PROPERTIES.add(_ADJACENCIES).eq(_FIELDS)).or_(
-    t.has("properties").and_(t.has("adjacencies").not_()).and_(_PROPERTIES.eq(_FIELDS))).or_(
-    t.has("properties").not_().and_(t.has("adjacencies")).and_(_ADJACENCIES.eq(_FIELDS))).or_(
-    t.has("properties").not_().and_(t.has("adjacencies").not_()).and_(_FIELDS.eq(0)))
+
+
+def _counted(fields: E.Writer) -> E.Writer:
+    """Whether the object schema `t` has a property or an adjacency per field."""
+    return t.has("properties").and_(t.has("adjacencies")).and_(_PROPERTIES.add(_ADJACENCIES).eq(fields)).or_(
+        t.has("properties").and_(t.has("adjacencies").not_()).and_(_PROPERTIES.eq(fields))).or_(
+        t.has("properties").not_().and_(t.has("adjacencies")).and_(_ADJACENCIES.eq(fields))).or_(
+        t.has("properties").not_().and_(t.has("adjacencies").not_()).and_(fields.eq(0)))
+
+
+_COUNTED = t.has("singleton").and_(_counted(_FIELDS.sub(1))).or_(t.has("singleton").not_().and_(_counted(_FIELDS)))
+"""Whether `t` has a property or an adjacency per field of `c`, its `SINGLETON` aside."""
 _HAS_SCHEMA = E.operation(
     "or", P.Exists(lambda q: q.symbols({"t": S.OfObject.Schema}).requires(
         P.Contains(c.children, lambda e: e.property == "name" and e.child.spelling == t.name)).requires(
@@ -567,14 +598,28 @@ def _keywords(decorator: Any) -> dict[str, str]:
 
 
 
+def _literal(node: Any) -> Any:
+    """The value of a literal the steps write: text, or a tuple, list or dict of literals."""
+    node = node.value if isinstance(node, Py.Parenthesized) else node
+    if isinstance(node, Py.Dict):
+        return {_literal(item.key): _literal(item.value) for item in node.items}
+    return [_literal(item) for item in node.elts] if isinstance(node, (Py.Tuple, Py.List)) else _unquoted(node.spelling)
+
+
+def _field_metadata(field: Any) -> dict[str, Any]:
+    """A field's metadata: `field(..., metadata={...})`'s, or none."""
+    if not isinstance(field.value, Py.Call):
+        return {}
+    return next((_literal(kw.value) for kw in field.value.keywords if kw.arg.spelling == "metadata"), {})
+
+
+def _described(builder: Any, description: str | None) -> Any:
+    return builder if description is None else builder.description(description)
+
+
 def _class_variables(cls: Any) -> dict[str, Any]:
-    """The values of a class's `ClassVar`s, by name: tuples of text, or of tuples of text."""
-    def value(node: Any) -> Any:
-        node = node.value if isinstance(node, Py.Parenthesized) else node
-        if isinstance(node, Py.Dict):
-            return {value(item.key): value(item.value) for item in node.items}
-        return [value(item) for item in node.elts] if isinstance(node, (Py.Tuple, Py.List)) else _unquoted(node.spelling)
-    return {_spelling(statement.target): value(statement.value) for statement in cls.body
+    """The values of a class's `ClassVar`s, by name: text, or tuples, lists and dicts of them."""
+    return {_spelling(statement.target): _literal(statement.value) for statement in cls.body
             if isinstance(statement, Py.AnnAssign) and isinstance(statement.annotation, Py.Subscript)
             and isinstance(statement.annotation.value, Py.Name) and _spelling(statement.annotation.value) == "ClassVar"}
 
@@ -610,9 +655,8 @@ def _entries(annotation: Any) -> str | None:
 
 def _me(module: Py.Module, owner: str, field: Any, relation: str, where: str) -> str:
     """The link an adjacency field is from: its metadata's `me`, else the one link of its entry class typed by the owner."""
-    if isinstance(field.value, Py.Call):
-        metadata = next(kw.value for kw in field.value.keywords if kw.arg.spelling == "metadata")
-        return _unquoted(next(item.value.spelling for item in metadata.items if _unquoted(item.key.spelling) == "me"))
+    if "me" in _field_metadata(field):
+        return _field_metadata(field)["me"]
     entry = _entry_class(module, relation)
     links = _class_variables(entry)["LINKS"] if entry is not None else []
     typed = [link for statement in (_fields(entry) if entry is not None else []) for link in [_spelling(statement.target)]
@@ -643,7 +687,8 @@ def _read_entry(schemas: Stores.Store, module: Py.Module, cls: Any) -> None:
     variables = _class_variables(cls)
     links = variables["LINKS"]
     properties = [lambda q, f=_property(_spelling(field.target)), y=_type(
-        schemas, _optional(field.annotation), f"{name}.{_spelling(field.target)}", module): q.name(f).of(y)
+        schemas, _optional(field.annotation), f"{name}.{_spelling(field.target)}", module),
+        d=_field_metadata(field).get("description"): _described(q.name(f).of(y), d)
         for field in _fields(cls) if _spelling(field.target) not in links]
     builder = S.OfRelation.Builder(schemas.registered(name)).links(*links).properties(*properties)
     builder = functools.reduce(lambda built, unique: built.unique(*unique), variables.get("UNIQUES", []), builder)
@@ -661,14 +706,16 @@ def _read_variants(schemas: Stores.Store, module: Py.Module, cls: Any, kind: str
     typed = {_property(_spelling(field.target)): _type(schemas, _optional(field.annotation),
                                                        f"{name}.{_spelling(field.target)}", module)
              for field in _fields(cls)}
+    described = {_property(_spelling(field.target)): _field_metadata(field).get("description") for field in _fields(cls)}
     parts = _class_variables(cls).get("PARTS")
     if parts is None:
-        members = [lambda q, f=f, y=y: q.name(f).of(y) for f, y in typed.items()]
+        members = [lambda q, f=f, y=y: _described(q.name(f).of(y), described[f]) for f, y in typed.items()]
     else:
+        own = _class_variables(cls).get("DESCRIPTIONS", {})
         members = [lambda q, f=part, y=(_named(schemas, held, module, f"{name}.PARTS") if isinstance(held, str) else
-                                        S.OfObject.Builder().properties(*[lambda r, g=g: r.name(g).of(typed[g])
+                                        S.OfObject.Builder().properties(*[lambda r, g=g: _described(r.name(g).of(typed[g]), described[g])
                                                                           for g in held]).create()):
-                   q.name(f).of(y) for part, held in parts.items()]
+                   _described(q.name(f).of(y), own.get(f)) for part, held in parts.items()]
     data = _named(schemas, name, module)
     builder = (S.OfUnion.Builder(data).branches(*members) if kind == "union" else
                S.OfIntersection.Builder(data).parts(*members).flat(parts is not None))
@@ -699,14 +746,18 @@ def _read_class(store: Stores.Combined, match: dict[str, Any], arguments: dict[s
     for field in _fields(cls):
         field_name, where = _property(_spelling(field.target)), f"{name}.{_spelling(field.target)}"
         relation_name = _entries(field.annotation)
+        description = _field_metadata(field).get("description")
         if relation_name is None:
-            properties.append(lambda q, f=field_name, y=_type(schemas, _optional(field.annotation), where, module): q.name(
-                f).of(y))
+            properties.append(lambda q, f=field_name, y=_type(schemas, _optional(field.annotation), where, module),
+                              d=description: _described(q.name(f).of(y), d))
         else:
             relation = _relation(schemas, module, relation_name, where)
             me = _me(module, name, field, relation_name, where)
-            adjacencies.append(lambda q, f=field_name, rel=relation, me=me: q.name(f).of(rel).me(me))
+            adjacencies.append(lambda q, f=field_name, rel=relation, me=me, d=description: _described(q.name(f).of(rel).me(me), d))
     builder = S.OfObject.Builder(_named(schemas, name, module)).properties(*properties).relations(*adjacencies)
+    singleton = _class_variables(cls).get("SINGLETON")
+    if singleton is not None:
+        builder = builder.singleton(singleton)
     if any(_keywords(decorated).get("eq") == "False" for decorated in cls.decorator_list):
         builder = builder.ref()
     docstring = _docstring_of(cls)
@@ -735,12 +786,12 @@ def _read_alias(store: Stores.Combined, match: dict[str, Any], arguments: dict[s
     value, metadata = alias.value, {}
     if isinstance(value, Py.Subscript) and isinstance(value.value, Py.Name) and _spelling(value.value) == "Annotated":
         value, held = value.slice.elts
-        metadata = {_unquoted(item.key.spelling): (_unquoted(item.value.spelling) if isinstance(item.value, Py.Constant) else
-                                                   [_unquoted(e.spelling) for e in item.value.elts]) for item in held.items}
+        metadata = _literal(held)
     nodes = _branches(value)
     names = metadata.get("branches", [_named_convention(node) for node in nodes])
+    described = metadata.get("descriptions", {})
     builder = S.OfUnion.Builder(_named(schemas, name, module)).branches(
-        *[lambda q, f=f, node=node: q.name(f).of(_type(schemas, node, f"{name}.{f}", module))
+        *[lambda q, f=f, node=node: _described(q.name(f).of(_type(schemas, node, f"{name}.{f}", module)), described.get(f))
           for f, node in zip(names, nodes)]).flat()
     if "description" in metadata:
         builder = builder.description(metadata["description"])
