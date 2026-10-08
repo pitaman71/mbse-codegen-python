@@ -99,6 +99,10 @@ requires.
 - **Names are matched by name.** After says "a class named after `s`" by its `name` child's spelling, since the
   reflected schemas and the syntax nodes are held by different stores and declare no relation between them; the trace
   links each step to its match.
+- **Each step links what it wrote** (0.9.2, mbse-patterns 0.9), by role: `Dataclass`, `Entry`, `Union` and
+  `Intersection` a `class`, `Alias` an `alias`, and reading back a `schema`. Within the session the link is the
+  element (`session.wrote(cls)` is the step that wrote it); a trace names it by its path when written
+  (`Codegen.Output/modules[0]/children[4]`, positional, since a syntax node has no name of its own).
 - **Reading back** registers each class's schema in the store given; a class a field names before its own step is
   registered empty, which `Schema`'s after does not take for that class's schema unless the class has no fields, and is
   filled when the class is read. An annotation `Dataclass` does not write is refused, naming the field (`Bad.x: cannot

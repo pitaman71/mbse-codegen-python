@@ -30,6 +30,7 @@ singleton `Codegen.Output` holds the module written or read. Each step is one de
   neither a class of the module nor a schema of the store is refused. A field's annotation is read as `Dataclass` and `Entry` write one, and any other is refused.
 - `FlatUnion` reads a type alias of the module back as a flat union, a branch per type of `A | B | ...`.
 
+Each step links what it wrote, by role: a `class`, an `alias`, or, reading back, a `schema` (mbse-patterns' `Wrote`).
 `generate(schemas, policy, earlier)` and `read(module, schemas)` run each to the end. `frozen` is the one thing a schema
 does not hold: reading code back loses it, and the trace of the generation keeps it. A generation given the steps of an
 earlier one takes each decision again where its key (`Dataclass(s=Contact)`, by the schema's name) still occurs, so
@@ -277,8 +278,9 @@ def _class_text(name: str, text: str) -> Any:
         lambda b: b.Constant().spelling(_quoted(text))).create()
 
 
-def _finish(store: Stores.Combined, built: Any) -> None:
-    """Places a class in the module, with the imports it needs: `dataclass`, `field` and `ClassVar` where it uses them."""
+def _finish(store: Stores.Combined, built: Any) -> dict[str, Any]:
+    """Places a class in the module, with the imports it needs: `dataclass`, `field` and `ClassVar` where it uses them;
+    what the step wrote, by role: the class."""
     module = _module(store)
     _require(module, "dataclasses", "dataclass")
     assigned = [statement for statement in built.body if isinstance(statement, Py.AnnAssign)]
@@ -288,6 +290,7 @@ def _finish(store: Stores.Combined, built: Any) -> None:
            for statement in assigned):
         _require(module, "typing", "ClassVar")
     _place(module, built)
+    return {"class": built}
 
 
 def _docstring(description: str | None) -> list[Any]:
@@ -300,7 +303,7 @@ def _declarers(objects: list[Any], relation: Any, link: str) -> list[Any]:
     return [o for o in objects if any(a.relation is relation and a.me == link for a in o.adjacencies.values())]
 
 
-def _render(store: Stores.Combined, match: dict[str, Any], arguments: dict[str, Any]) -> None:
+def _render(store: Stores.Combined, match: dict[str, Any], arguments: dict[str, Any]) -> dict[str, Any]:
     schema = match["s"]
     B = Py.LANGUAGE.Builders
     body = _docstring(schema.description) + ([] if schema.singleton is None else [_class_text("SINGLETON", schema.singleton)])
@@ -316,10 +319,10 @@ def _render(store: Stores.Combined, match: dict[str, Any], arguments: dict[str, 
             _default(lambda b: b.Tuple(), metadata)).create())
     built = B.ClassDef().name(schema.name).add_decorator_list(_decorator(schema, arguments["frozen"])).create()
     built.body = body or [B.Pass().create()]
-    _finish(store, built)
+    return _finish(store, built)
 
 
-def _render_entry(store: Stores.Combined, match: dict[str, Any], arguments: dict[str, Any]) -> None:
+def _render_entry(store: Stores.Combined, match: dict[str, Any], arguments: dict[str, Any]) -> dict[str, Any]:
     relation = match["r"]
     B = Py.LANGUAGE.Builders
     objects = list(store.extent("Schemas.Object"))
@@ -333,7 +336,7 @@ def _render_entry(store: Stores.Combined, match: dict[str, Any], arguments: dict
         lambda b: b.Call().func(lambda x: _name(x, "dataclass")).add_keywords(
             lambda kw: kw.arg("eq").value(lambda x: x.Constant().spelling("False")))).create()
     built.body = body
-    _finish(store, built)
+    return _finish(store, built)
 
 
 def _defined(statement: Any) -> str | None:
@@ -406,7 +409,7 @@ def _metadata(entries: dict[str, Any]) -> Any:
     return literal(entries)
 
 
-def _render_alias(store: Stores.Combined, match: dict[str, Any], arguments: dict[str, Any]) -> None:
+def _render_alias(store: Stores.Combined, match: dict[str, Any], arguments: dict[str, Any]) -> dict[str, Any]:
     schema = match["s"]
     B = Py.LANGUAGE.Builders
     union = functools.reduce(lambda left, branch: lambda b: b.BinOp().left(left).op("|").right(_annotation(branch.type)),
@@ -424,11 +427,13 @@ def _render_alias(store: Stores.Combined, match: dict[str, Any], arguments: dict
     module = _module(store)
     if metadata:
         _require(module, "typing", "Annotated")
-    _place(module, B.TypeAlias().name(lambda b: b.id(schema.name)).value(value).create())
+    alias = B.TypeAlias().name(lambda b: b.id(schema.name)).value(value).create()
+    _place(module, alias)
+    return {"alias": alias}
 
 
 def _render_variants(kind: str) -> Any:
-    def render(store: Stores.Combined, match: dict[str, Any], arguments: dict[str, Any]) -> None:
+    def render(store: Stores.Combined, match: dict[str, Any], arguments: dict[str, Any]) -> dict[str, Any]:
         schema = match["s"]
         B = Py.LANGUAGE.Builders
         members = getattr(schema, _MEMBERS[kind])
@@ -454,7 +459,7 @@ def _render_variants(kind: str) -> Any:
         body += [_optional_field(member.name, _annotation(member.type), member.description) for member in members]
         built = B.ClassDef().name(schema.name).add_decorator_list(_decorator(schema, arguments["frozen"])).create()
         built.body = body
-        _finish(store, built)
+        return _finish(store, built)
     return render
 
 
@@ -732,16 +737,17 @@ def _docstring_of(cls: Any) -> str | None:
     return None
 
 
-def _read_class(store: Stores.Combined, match: dict[str, Any], arguments: dict[str, Any]) -> None:
+def _read_class(store: Stores.Combined, match: dict[str, Any], arguments: dict[str, Any]) -> dict[str, Any]:
+    """Reads a class back; what the step wrote, by role: the schema."""
     cls = match["c"]
     schemas, module, name = _schemas(store), _module(store), cls.name.spelling
     if "LINKS" in _class_variables(cls):
         _read_entry(schemas, module, cls)
-        return
+        return {"schema": schemas.registered(name)}
     kind = _class_variables(cls).get("KIND")
     if kind is not None:
         _read_variants(schemas, module, cls, kind)
-        return
+        return {"schema": schemas.registered(name)}
     properties, adjacencies = [], []
     for field in _fields(cls):
         field_name, where = _property(_spelling(field.target)), f"{name}.{_spelling(field.target)}"
@@ -763,7 +769,7 @@ def _read_class(store: Stores.Combined, match: dict[str, Any], arguments: dict[s
     docstring = _docstring_of(cls)
     if docstring is not None:
         builder = builder.description(docstring)
-    builder.update()
+    return {"schema": builder.update()}
 
 
 def _branches(node: Any) -> list[Any]:
@@ -780,7 +786,7 @@ def _named_convention(node: Any) -> str:
     return name if name in NATIVES or isinstance(node, Py.Subscript) else _snake(name)
 
 
-def _read_alias(store: Stores.Combined, match: dict[str, Any], arguments: dict[str, Any]) -> None:
+def _read_alias(store: Stores.Combined, match: dict[str, Any], arguments: dict[str, Any]) -> dict[str, Any]:
     alias = match["al"]
     schemas, module, name = _schemas(store), _module(store), alias.name.id.spelling
     value, metadata = alias.value, {}
@@ -795,7 +801,7 @@ def _read_alias(store: Stores.Combined, match: dict[str, Any], arguments: dict[s
           for f, node in zip(names, nodes)]).flat()
     if "description" in metadata:
         builder = builder.description(metadata["description"])
-    builder.update()
+    return {"schema": builder.update()}
 
 
 _ALIASED = P.Exists(lambda q: q.symbols({"t": S.OfUnion.Schema, "nm": Py.Name.Schema}).requires(

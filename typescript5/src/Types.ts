@@ -31,6 +31,7 @@
  *   that is neither a class of the module nor a schema of the store is refused. A field's annotation is read as `Dataclass` and `Entry` write one, and any other is refused.
  * - `FlatUnion` reads a type alias of the module back as a flat union, a branch per type of `A | B | ...`.
  *
+ * Each step links what it wrote, by role: a `class`, an `alias`, or, reading back, a `schema` (mbse-patterns' `Wrote`).
  * `generate(schemas, policy, earlier)` and `read(module, schemas)` run each to the end. `frozen` is the one thing a
  * schema does not hold: reading code back loses it, and the trace of the generation keeps it. A generation given the
  * steps of an earlier one takes each decision again where its key (`Dataclass(s=Contact)`, by the schema's name) still
@@ -267,8 +268,9 @@ function classText(named: string, text: string): any {
     (b: any) => b.Constant().spelling(quoted(text))).create();
 }
 
-/** Places a class in the module, with the imports it needs: `dataclass`, `field` and `ClassVar` where it uses them. */
-function finish(store: Stores.Combined, built: any): void {
+/** Places a class in the module, with the imports it needs: `dataclass`, `field` and `ClassVar` where it uses them;
+ * what the step wrote, by role: the class. */
+function finish(store: Stores.Combined, built: any): Map<string, unknown> {
   const module = moduleOf(store);
   require(module, "dataclasses", "dataclass");
   const assigned = (built.body as any[]).filter((statement) => statement instanceof Py.AnnAssign);
@@ -277,6 +279,7 @@ function finish(store: Stores.Combined, built: any): void {
     require(module, "typing", "ClassVar");
   }
   place(module, built);
+  return new Map([["class", built]]);
 }
 
 function docstring(description: string | null): any[] {
@@ -290,7 +293,7 @@ function declarers(objects: any[], relation: unknown, link: string): any[] {
     && adjacency.me === link));
 }
 
-function render(store: Stores.Combined, match: Record<string, unknown>, args: Record<string, unknown>): void {
+function render(store: Stores.Combined, match: Record<string, unknown>, args: Record<string, unknown>): Map<string, unknown> {
   const schema = match["s"] as S.OfObject.Data;
   const B = Py.LANGUAGE.Builders as any;
   const body: any[] = [...docstring(schema.description), ...(schema.singleton === null ? [] : [classText("SINGLETON", schema.singleton)]),
@@ -308,10 +311,10 @@ function render(store: Stores.Combined, match: Record<string, unknown>, args: Re
   }
   const built = B.ClassDef().name(schema.name).add_decorator_list(decorator(schema, args["frozen"] as boolean)).create();
   built.body = body.length > 0 ? body : [B.Pass().create()];
-  finish(store, built);
+  return finish(store, built);
 }
 
-function renderEntry(store: Stores.Combined, match: Record<string, unknown>): void {
+function renderEntry(store: Stores.Combined, match: Record<string, unknown>): Map<string, unknown> {
   const relation = match["r"] as S.OfRelation.Data;
   const B = Py.LANGUAGE.Builders as any;
   const objects = [...store.extent("Schemas.Object")] as any[];
@@ -323,7 +326,7 @@ function renderEntry(store: Stores.Combined, match: Record<string, unknown>): vo
   const built = B.ClassDef().name(relation.name).add_decorator_list((b: any) => b.Call().func((x: any) => name(x, "dataclass"))
     .add_keywords((kw: any) => kw.arg("eq").value((x: any) => x.Constant().spelling("False")))).create();
   built.body = body;
-  finish(store, built);
+  return finish(store, built);
 }
 
 /** The name a class or a type alias defines, or null for another statement. */
@@ -391,7 +394,7 @@ function metadataLiteral(value: MetadataValue): (b: any) => any {
     (i: any) => i.key(metadataLiteral(key)).value(metadataLiteral(item))), b.Dict());
 }
 
-function renderAlias(store: Stores.Combined, match: Record<string, unknown>): void {
+function renderAlias(store: Stores.Combined, match: Record<string, unknown>): Map<string, unknown> {
   const schema = match["s"] as any;
   const B = Py.LANGUAGE.Builders as any;
   const union = (schema.branches as any[]).slice(1).reduce((left: (b: any) => any, branch: any) => (b: any) => b.BinOp().left(left)
@@ -408,11 +411,13 @@ function renderAlias(store: Stores.Combined, match: Record<string, unknown>): vo
     (x: any) => x.Tuple().add_elts(union).add_elts(metadataLiteral(metadata)));
   const module = moduleOf(store);
   if (hasMetadata) require(module, "typing", "Annotated");
-  place(module, B.TypeAlias().name((b: any) => b.id(schema.name)).value(value).create());
+  const alias = B.TypeAlias().name((b: any) => b.id(schema.name)).value(value).create();
+  place(module, alias);
+  return new Map([["alias", alias]]);
 }
 
 function renderVariants(kind: string) {
-  return (store: Stores.Combined, match: Record<string, unknown>, args: Record<string, unknown>): void => {
+  return (store: Stores.Combined, match: Record<string, unknown>, args: Record<string, unknown>): Map<string, unknown> => {
     const schema = match["s"] as any;
     const B = Py.LANGUAGE.Builders as any;
     const body = [...docstring(schema.description), classText("KIND", kind)];
@@ -439,7 +444,7 @@ function renderVariants(kind: string) {
     body.push(...members.map((member) => optionalField(member.name, annotation(member.type), member.description)));
     const built = B.ClassDef().name(schema.name).add_decorator_list(decorator(schema, args["frozen"] as boolean)).create();
     built.body = body;
-    finish(store, built);
+    return finish(store, built);
   };
 }
 
@@ -694,17 +699,18 @@ function docstringOf(cls: any): string | null {
   return body.length > 0 && body[0] instanceof Py.Expr && body[0].value instanceof Py.Constant ? unquoted(body[0].value.spelling as string) : null;
 }
 
-function readClass(store: Stores.Combined, match: Record<string, unknown>): void {
+/** Reads a class back; what the step wrote, by role: the schema. */
+function readClass(store: Stores.Combined, match: Record<string, unknown>): Map<string, unknown> {
   const cls = match["c"] as any;
   const [schemas, module, named] = [schemasOf(store), moduleOf(store), cls.name.spelling as string];
   if (classVariables(cls).has("LINKS")) {
     readEntry(schemas, module, cls);
-    return;
+    return new Map([["schema", schemas.registered(named)]]);
   }
   const kind = classVariables(cls).get("KIND");
   if (kind !== undefined) {
     readVariants(schemas, module, cls, kind);
-    return;
+    return new Map([["schema", schemas.registered(named)]]);
   }
   const [properties, adjacencies]: [((q: any) => any)[], ((q: any) => any)[]] = [[], []];
   for (const statement of fieldsOf(cls)) {
@@ -726,7 +732,7 @@ function readClass(store: Stores.Combined, match: Record<string, unknown>): void
   if (cls.decorator_list.some((decorated: any) => keywords(decorated).get("eq") === "False")) builder = builder.ref();
   const described = docstringOf(cls);
   if (described !== null) builder = builder.description(described);
-  builder.update();
+  return new Map([["schema", builder.update()]]);
 }
 
 /** The types of `A | B | ...`, in order: names or subscripts. */
@@ -740,7 +746,7 @@ function namedConvention(node: any): string {
   return NATIVES.includes(named) || node instanceof Py.Subscript ? named : snakeCase(named);
 }
 
-function readAlias(store: Stores.Combined, match: Record<string, unknown>): void {
+function readAlias(store: Stores.Combined, match: Record<string, unknown>): Map<string, unknown> {
   const alias = match["al"] as any;
   const [schemas, module, named] = [schemasOf(store), moduleOf(store), alias.name.id.spelling as string];
   let [value, metadata]: [any, Record<string, any>] = [alias.value, {}];
@@ -757,7 +763,7 @@ function readAlias(store: Stores.Combined, match: Record<string, unknown>): void
     return (q: any) => withDescription(q.name(names[i]).of(type), notes[names[i] as string]);
   })).flat();
   if (metadata["description"] !== undefined) builder = builder.description(metadata["description"]);
-  builder.update();
+  return new Map([["schema", builder.update()]]);
 }
 
 const ALIASED = P.Exists((q) => q.symbols({ t: S.OfUnion.Schema, nm: Py.Name.Schema }).requires(

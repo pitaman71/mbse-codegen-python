@@ -6,8 +6,8 @@
   },
   "mbse-patterns": {
     "repository": "git@github.com:pitaman71/mbse-patterns.git",
-    "version": "0.8.2",
-    "commit": "4efb922ea21ad93f0e2157325b6961a3e4e39b5d"
+    "version": "0.9.0",
+    "commit": "417707b9d52672fe0ebfd3768d488d26ccd4cbb8"
   },
   "mbse-programs": {
     "repository": "git@github.com:pitaman71/mbse-programs.git",

@@ -24,7 +24,7 @@ bridge also **reads back**: Python's form holds what the schema holds, the step'
 | The caller iterates the next possible steps | Done: `session.candidates()` |
 | The caller supplies a step's parameters | Done: `session.take(candidate)` with its arguments |
 | The caller browses and selects among step types | Done: candidates of every transform, at every match |
-| The trace keeps the order, and role-specific links to source and target elements | Half done: a step keeps its order and its source elements by symbol (`s=Contact`), but nothing links it to the target elements it wrote (the class, the alias) |
+| The trace keeps the order, and role-specific links to source and target elements | Done (mbse-patterns 0.9, codegen 0.9.2): a step links its source elements by symbol (`s=Contact`) and the target elements it wrote by role (`class`, `alias`, `schema`), as relations `Transforms.Matched` and `Transforms.Wrote`, each entry with its path |
 | Policies reduce or remove interactive choices | Done: `Policy`, `Clause`, `Types.PLAIN` |
 
 ## Silent losses
@@ -128,8 +128,8 @@ not report it, and reading back did not restore it. 0.9.1 writes and reads each,
    recursive predicate, and `DEPTH` is gone.
 2. **No silent loss** (0.9.1, done): the singleton and every description, written and read back, and widths left
    without a class.
-3. **Target links in the trace** (mbse-patterns): each step links to the elements it wrote, by role, as the process
-   requires.
+3. **Target links in the trace** (mbse-patterns 0.9, codegen 0.9.2, done): each step links the elements it matched
+   and wrote, by role, as relations whose entries hold their paths.
 4. The deterministic rows without parameters: named natives and lists as aliases, widths, extents with int bounds,
    `python3` tokens.
 5. The rows with a parameter: other formats' natives (`host`), inline schemas (`name`), keys of schemas (`frozen`
