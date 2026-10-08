@@ -43,7 +43,7 @@ not report it, and reading back did not restore it. 0.9.1 writes and reads each,
 | Construct | Python bridge | Ambiguity, as a parameter | Status |
 |---|---|---|---|
 | Basic native (`bool`, `int`, `float`, `str`, `bytes`) | Python's own type | none | built |
-| `python3` token of a basic native | the same type; reads back as `basic` | none (both tokens map to one host type) | feasible: it is refused today. Reading back cannot tell the two apart, so the format would go in metadata |
+| `python3` token of a basic native | the same type, the token in metadata: `Annotated[int, {"native": ["python3", "int"]}]`, so that it reads back as `python3` | none | built (0.12). Another `python3` token (`decimal.Decimal`) has no host type in mbse-schemas' proxies, so no class |
 | Native of another format (`ccpp` `int32_t`, `typescript5` `number`) | a basic Python type, the token kept in metadata: `Annotated[int, {"native": ["ccpp", "int32_t"]}]` | `host`: which basic type. A policy may hold a table of them | feasible |
 | Width in bits or bytes, an int | metadata: `Annotated[int, {"bits": 32}]` | none | built (0.11) |
 | A native's own description | metadata: `Annotated[int, {"description": "a count"}]` | none | built (0.11) |
@@ -133,7 +133,7 @@ not report it, and reading back did not restore it. 0.9.1 writes and reads each,
 3. **Target links in the trace** (mbse-patterns 0.9, codegen 0.9.2, done): each step links the elements it matched
    and wrote, by role, as relations whose entries hold their paths.
 4. The deterministic rows without parameters: named natives and lists as aliases (0.10, done), widths, natives' own
-   descriptions and extents with int bounds (0.11, done), `python3` tokens.
+   descriptions and extents with int bounds (0.11, done), `python3` tokens (0.12, done).
 5. The rows with a parameter: other formats' natives (`host`), inline schemas (`name`), keys of schemas (`frozen`
    coupling), the adjacency `container`, dotted names (`layout`), the rename step.
 6. Bindings (`bound`).

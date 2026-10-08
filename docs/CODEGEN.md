@@ -59,7 +59,10 @@ requires.
 - **What an annotation cannot say is `Annotated` metadata** (0.11): a native's width (`Annotated[int, {"bits": 32}]`),
   a list's extent (`Annotated[list[Phone], {"minimum": 1, "maximum": 3}]`, the maximum only where it has one) and a
   native's or a list's own description, inline or in a named one's alias (`type Byte = Annotated[int, {"bits": 8,
-  "description": "one octet"}]`). A flat union's branch so annotated is still named after its type (`int`).
+  "description": "one octet"}]`). A flat union's branch so annotated is still named after its type (`int`). A
+  `python3` token of a basic type's name is that type, its token in the metadata (`Annotated[int, {"native":
+  ["python3", "int"]}]`), so that it reads back as `python3`; another `python3` token (`decimal.Decimal`), for which
+  mbse-schemas' proxies have no host type, has no Python form here yet (0.12).
 - **A named native or list is a type alias** (0.10) of what it holds, as a proxy reads its value: `type Word = str`,
   `type Names = list[Word]`, `type Tally = dict[Word, Count]`, its description in `Annotated` metadata, as a flat
   union's is. A field names it (`word: Word | None = None`); one without an alias (another format's native, a bounded

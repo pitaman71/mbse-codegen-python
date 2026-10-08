@@ -120,11 +120,17 @@ s, c, n, k, t, p, x, r, a, b, u, y, w, d = (E.variable(name) for name in (
     "s", "c", "n", "k", "t", "p", "x", "r", "a", "b", "u", "y", "w", "d"))
 
 
+def _pythonic(native: E.Writer) -> E.Writer:
+    """Whether a native's token is one Python's types hold: a basic one, or `python3`'s of the same name."""
+    return native.get("format").eq("basic").or_(native.get("format").eq("python3").and_(functools.reduce(
+        lambda either, other: either.or_(other), [native.get("token").eq(named) for named in NATIVES])))
+
+
 def _basic(type_: E.Writer) -> E.Writer:
-    """A basic native, as Python writes it, its width and description in `Annotated` metadata: one without parameters or
-    a width that is a term, which wait on parameters' Python form."""
+    """A native Python's types hold (see `_pythonic`), its width, description and a `python3` token in `Annotated`
+    metadata: one without parameters or a width that is a term, which wait on parameters' Python form."""
     native = type_.get("native")
-    return native.get("format").eq("basic").and_(native.has("terms").not_()).and_(native.has("parameters").not_())
+    return _pythonic(native).and_(native.has("terms").not_()).and_(native.has("parameters").not_())
 
 
 def _bounded(indexed: E.Writer) -> E.Writer:
@@ -199,10 +205,13 @@ def _annotation(type_: Any) -> Any:
 
 
 def _facets(type_: Any) -> dict[str, Any]:
-    """What a native's or a list's annotation cannot say, as `Annotated` metadata: a native's width in bits or bytes, a
-    list's extent, its `minimum` and its `maximum` where it has one, and its description."""
+    """What a native's or a list's annotation cannot say, as `Annotated` metadata: a native's token where it is not
+    `basic` (`"native": ["python3", "int"]`) and its width in bits or bytes, a list's extent, its `minimum` and its
+    `maximum` where it has one, and its description."""
     facets: dict[str, Any] = {}
     if isinstance(type_, S.OfNative.Data):
+        if type_.token.format != S.BASIC:
+            facets["native"] = [type_.token.format, type_.token.name]
         facets.update({unit: width for unit, width in (("bits", type_.bits), ("bytes", type_.bytes)) if width is not None})
     elif isinstance(type_, S.OfIndexed.Data) and type_.extent is not None:
         facets["minimum"] = type_.extent.minimum
@@ -553,10 +562,11 @@ def _render_named(store: Stores.Combined, match: dict[str, Any], arguments: dict
 
 
 _NAMED = s.has("name").and_(s.has("parameters").not_())
-NativeAlias = T.Transform("NativeAlias", _over({"s": S.OfNative.Schema}, _NAMED.and_(s.get("format").eq("basic")).and_(
+NativeAlias = T.Transform("NativeAlias", _over({"s": S.OfNative.Schema}, _NAMED.and_(_pythonic(s)).and_(
     s.has("terms").not_())),
     _over({"s": S.OfNative.Schema}, _HAS_ALIAS), rewrite=_render_named)
-"""A named basic native as a type alias of Python's type for it (`type Word = str`), as a proxy reads its value."""
+"""A named native Python's types hold (see `_pythonic`) as a type alias of Python's type for it (`type Word = str`), as a
+proxy reads its value."""
 ListAlias = T.Transform("ListAlias", _over({"s": S.OfIndexed.Schema}, _NAMED.and_(_bounded(s)).and_(
     s.has("key").not_().or_(_key(s.get("key")))).and_(_rendered(s.get("item")))),
     _over({"s": S.OfIndexed.Schema}, _HAS_ALIAS), rewrite=_render_named)
@@ -641,6 +651,7 @@ def _faceted(type_: Any, facets: dict[str, Any]) -> Any:
     """A builder of the native or list `type_` with the facets `Annotated` metadata gives it (see `_facets`)."""
     if isinstance(type_, S.OfNative.Data):
         builder = S.OfNative.Builder(type_)
+        builder = builder.token(*facets["native"]) if "native" in facets else builder
         for unit in ("bits", "bytes"):
             builder = getattr(builder, unit)(facets[unit]) if unit in facets else builder
     else:

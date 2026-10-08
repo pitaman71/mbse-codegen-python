@@ -114,11 +114,17 @@ const [s, c, n, k, t, p, x, r, a, b, u, y, w, d] = ["s", "c", "n", "k", "t", "p"
   .map((named) => E.variable(named)) as [E.Writer, E.Writer, E.Writer, E.Writer, E.Writer, E.Writer, E.Writer, E.Writer,
     E.Writer, E.Writer, E.Writer, E.Writer, E.Writer, E.Writer];
 
-/** A basic native, as Python writes it, its width and description in `Annotated` metadata: one without parameters or
- * a width that is a term, which wait on parameters' Python form. */
+/** Whether a native's token is one Python's types hold: a basic one, or `python3`'s of the same name. */
+function pythonic(native: E.Writer): E.Writer {
+  return native.get("format").eq("basic").or_(native.get("format").eq("python3").and_(
+    NATIVES.map((named) => native.get("token").eq(named)).reduce((either, other) => either.or_(other))));
+}
+
+/** A native Python's types hold (see `pythonic`), its width, description and a `python3` token in `Annotated`
+ * metadata: one without parameters or a width that is a term, which wait on parameters' Python form. */
 function basic(type: E.Writer): E.Writer {
   const native = type.get("native");
-  return native.get("format").eq("basic").and_(native.has("terms").not_()).and_(native.has("parameters").not_());
+  return pythonic(native).and_(native.has("terms").not_()).and_(native.has("parameters").not_());
 }
 
 /** Whether a list's extent, if it has one, is of int bounds, which `Annotated` metadata holds. */
@@ -188,11 +194,14 @@ function annotation(type: any): (b: any) => any {
   return type.name !== null ? (b) => name(b, type.name) : annotated(structureAnnotation(type), facets(type));
 }
 
-/** What a native's or a list's annotation cannot say, as `Annotated` metadata: a native's width in bits or bytes, a
- * list's extent, its `minimum` and its `maximum` where it has one, and its description. */
+/** What a native's or a list's annotation cannot say, as `Annotated` metadata: a native's token where it is not
+ * `basic` (`"native": ["python3", "int"]`) and its width in bits or bytes, a list's extent, its `minimum` and its
+ * `maximum` where it has one, and its description. */
 function facets(type: any): Record<string, MetadataValue> {
   const found: Record<string, MetadataValue> = {};
   if (type instanceof S.OfNative.Data) {
+    const token = type.token as S.OfNative.Token;
+    if (token.format !== S.BASIC) found["native"] = [token.format, token.name];
     for (const unit of ["bits", "bytes"]) if ((type as any)[unit] !== null) found[unit] = (type as any)[unit];
   } else if (type instanceof S.OfIndexed.Data && type.extent !== null) {
     found["minimum"] = type.extent.minimum as bigint;
@@ -534,8 +543,9 @@ function renderNamed(store: Stores.Combined, match: Record<string, unknown>): Ma
 }
 
 const NAMED = s.has("name").and_(s.has("parameters").not_());
-/** A named basic native as a type alias of Python's type for it (`type Word = str`), as a proxy reads its value. */
-export const NativeAlias = new T.Transform("NativeAlias", over({ s: S.OfNative.Schema as any }, NAMED.and_(s.get("format").eq("basic")).and_(
+/** A named native Python's types hold (see `pythonic`) as a type alias of Python's type for it (`type Word = str`), as
+ * a proxy reads its value. */
+export const NativeAlias = new T.Transform("NativeAlias", over({ s: S.OfNative.Schema as any }, NAMED.and_(pythonic(s)).and_(
   s.has("terms").not_())),
   over({ s: S.OfNative.Schema as any }, HAS_ALIAS), { rewrite: renderNamed as never });
 /** A named list as a type alias of `list[T]` or `dict[K, T]` (`type Names = list[str]`), as a proxy reads its value. */
@@ -674,6 +684,7 @@ function faceted(type: any, found: Record<string, any>): any {
   let builder: any;
   if (type instanceof S.OfNative.Data) {
     builder = new S.OfNative.Builder(type);
+    if (found["native"] !== undefined) builder = builder.token(...(found["native"] as [string, string]));
     for (const unit of ["bits", "bytes"]) if (found[unit] !== undefined) builder = builder[unit](found[unit]);
   } else {
     builder = new S.OfIndexed.Builder(type);
