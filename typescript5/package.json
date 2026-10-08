@@ -1,6 +1,6 @@
 {
   "name": "@mbse/codegen-python",
-  "version": "0.12.2",
+  "version": "0.13.0",
   "description": "Schemas as idiomatic Python source and back: mbse-schemas' schemas rendered as dataclasses through mbse-programs' syntax trees, step by step, by mbse-patterns' transforms (TypeScript implementation)",
   "keywords": [
     "code generation",

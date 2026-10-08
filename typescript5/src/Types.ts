@@ -141,17 +141,11 @@ function simple(type: E.Writer): E.Writer {
     named.reduce((either, other) => E.operation("or", either as never, other as never)) as never));
 }
 
-/** Whether a list's key renders: a basic native, or a named one, whose alias names it. */
-function keyRenders(type: E.Writer): E.Writer {
-  const named = P.Exists((q) => q.symbols({ x: S.OfNative.Schema }).requires(x.get("name").eq(type.get("named").get("name"))));
-  return basic(type).or_(E.operation("and", type.has("named"), named as never));
-}
-
 /** Whether `Dataclass` renders a type `t`: a simple one, or a list of one it renders, its extent if any of int bounds,
- * positional or keyed by a native, basic or named, nested to any depth. It applies itself to the list's item. */
+ * positional or keyed by a type it renders, nested to any depth. It applies itself to the list's item. */
 export const Rendered = new P.OfPredicate.Builder().name("Codegen.Rendered").parameters((q) => q.name("t")).create();
 new P.OfPredicate.Builder(Rendered).requires(simple(t).or_(t.has("indexed").and_(bounded(t.get("indexed"))).and_(
-  t.get("indexed").has("key").not_().or_(keyRenders(t.get("indexed").get("key")))).and_(
+  t.get("indexed").has("key").not_().or_(Rendered.call(t.get("indexed").get("key")) as never)).and_(
   Rendered.call(t.get("indexed").get("item")) as never))).update();
 
 /** Whether `Dataclass` renders the type: `Rendered` applied to it. */
@@ -217,10 +211,28 @@ function annotated(held: (b: any) => any, found: Record<string, MetadataValue>):
     (x: any) => x.Tuple().add_elts(held).add_elts(metadataLiteral(found)));
 }
 
-/** The annotation of what a type holds, its name aside: a native's, or a list's of its items. */
+/** mbse-schemas' keyed list, which generated code holds where a `dict` cannot compare keys as schema equality does. */
+export const MAP = "Proxies.OfIndexed.Map";
+
+/** Whether a list keyed by `key` is a `Proxies.OfIndexed.Map`, not a `dict`: a key that is not a native, or a `float`,
+ * whose NaNs and `-0.0` a `dict` compares otherwise (mbse-schemas' EQUALITY.md). */
+function mapped(key: any): boolean {
+  const structure = S.structure(key) as any;
+  return !(structure instanceof S.OfNative.Data) || (structure.token as S.OfNative.Token).name === "float";
+}
+
+/** `a.b.c` as names and attributes. */
+function dotted(builder: any, text: string): any {
+  const parts = text.split(".");
+  const last = parts.pop() as string;
+  return parts.length > 0 ? builder.Attribute().value((x: any) => dotted(x, parts.join("."))).attr(last) : name(builder, last);
+}
+
+/** The annotation of what a type holds, its name aside: a native's, or a list's of its items, keyed by a `dict` or,
+ * where a `dict` cannot compare its keys as schema equality does, a `Proxies.OfIndexed.Map`. */
 function structureAnnotation(type: any): (b: any) => any {
   if (type instanceof S.OfIndexed.Data && type.key !== null) {
-    return (b) => b.Subscript().value((x: any) => name(x, "dict")).slice(
+    return (b) => b.Subscript().value((x: any) => dotted(x, mapped(type.key) ? MAP : "dict")).slice(
       (x: any) => x.Tuple().add_elts(annotation(type.key)).add_elts(annotation(type.item)));
   }
   if (type instanceof S.OfIndexed.Data) {
@@ -239,8 +251,11 @@ function quoted(text: string): string {
   return `"${text.replaceAll("\\", "\\\\").replaceAll('"', '\\"').replaceAll("\n", "\\n")}"`;
 }
 
-/** Imports `name` from `source`, once, after `from __future__ import annotations`, the imports in the order
- * `dataclasses`, `typing`, whichever step needs them first. */
+/** The modules the steps import from, in the order their imports come. */
+const SOURCES = ["__future__", "dataclasses", "typing", "mbse.Schemas.Framework"];
+
+/** Imports `named` from `source`, once, after `from __future__ import annotations`, the imports in the order of
+ * `SOURCES`, whichever step needs them first. */
 function require(module: Py.Module, source: string, named: string): void {
   const B = Py.LANGUAGE.Builders as any;
   let imports = module.body.filter((statement) => statement instanceof Py.ImportFrom) as any[];
@@ -249,15 +264,20 @@ function require(module: Py.Module, source: string, named: string): void {
       (alias: any) => alias.name((d: any) => d.add_names("annotations"))).create()];
     module.body.splice(0, 0, imports[0]);
   }
-  let found = imports.find((statement) => statement.module.names[0].spelling === source);
+  let found = imports.find((statement) => dottedName(statement.module) === source);
   if (found === undefined) {
-    found = B.ImportFrom().module((d: any) => d.add_names(source)).create();
-    module.body.splice(source === "typing" ? 2 : 1, 0, found); // dataclasses is always needed first
+    found = B.ImportFrom().module((d: any) => source.split(".").reduce((built: any, part) => built.add_names(part), d)).create();
+    module.body.splice(imports.filter((statement) => SOURCES.indexOf(dottedName(statement.module)) < SOURCES.indexOf(source)).length, 0, found);
   }
   const names = found.names.map((alias: any) => alias.name.names[0].spelling as string);
   if (!names.includes(named)) { // in name order, whichever step needs it first
     found.names.splice(names.filter((other: string) => other < named).length, 0, B.Alias().name((d: any) => d.add_names(named)).create());
   }
+}
+
+/** A `DottedName`'s text. */
+function dottedName(named: any): string {
+  return named.names.map((part: any) => part.spelling).join(".");
 }
 
 function decorator(schema: any, frozen: boolean): (b: any) => any {
@@ -311,9 +331,11 @@ function optionalField(named: string, type: (b: any) => any, description: string
     defaultOf((b: any) => b.Constant().spelling("None"), description === null ? {} : { description })).create();
 }
 
-/** Imports `Annotated` where `built` uses it. */
+/** Imports `Annotated` and mbse-schemas' `Proxies` where `built` uses them. */
 function annotations(module: Py.Module, built: any): void {
-  if ([...Trees.walk(built)].some((node) => node instanceof Py.Name && spelling(node) === "Annotated")) require(module, "typing", "Annotated");
+  const used = new Set([...Trees.walk(built)].filter((node) => node instanceof Py.Name).map((node) => spelling(node)));
+  if (used.has("Annotated")) require(module, "typing", "Annotated");
+  if (used.has("Proxies")) require(module, "mbse.Schemas.Framework", "Proxies");
 }
 
 /** `NAME: ClassVar[str] = "text"`. */
@@ -550,7 +572,7 @@ export const NativeAlias = new T.Transform("NativeAlias", over({ s: S.OfNative.S
   over({ s: S.OfNative.Schema as any }, HAS_ALIAS), { rewrite: renderNamed as never });
 /** A named list as a type alias of `list[T]` or `dict[K, T]` (`type Names = list[str]`), as a proxy reads its value. */
 export const ListAlias = new T.Transform("ListAlias", over({ s: S.OfIndexed.Schema as any }, NAMED.and_(bounded(s)).and_(
-  s.has("key").not_().or_(keyRenders(s.get("key")))).and_(rendered(s.get("item")))),
+  s.has("key").not_().or_(rendered(s.get("key")))).and_(rendered(s.get("item")))),
   over({ s: S.OfIndexed.Schema as any }, HAS_ALIAS), { rewrite: renderNamed as never });
 
 // --- Classes to schemas ---
@@ -613,16 +635,24 @@ function typeOf(schemas: Stores.Store, node: any, where: string, module: Py.Modu
     const named = spelling(node);
     return NATIVES.includes(named) ? S.OfNative.resolve((x) => x.token("basic", named)) : registered(schemas, named, module, where);
   }
-  const container = node instanceof Py.Subscript && node.value instanceof Py.Name ? spelling(node.value) : null;
+  const container = node instanceof Py.Subscript ? head(node.value) : null;
   if (container === "list") return new S.OfIndexed.Builder().of(typeOf(schemas, node.slice, where, module)).create();
-  if (container === "dict" && node.slice instanceof Py.Tuple && node.slice.elts.length === 2) {
+  if ((container === "dict" || container === MAP) && node.slice instanceof Py.Tuple && node.slice.elts.length === 2) {
     const [key, item] = node.slice.elts.map((element: any) => typeOf(schemas, element, where, module));
     return new S.OfIndexed.Builder().key(key).of(item).create();
   }
   throw new ValueError(`${where}: cannot read the annotation ${Python312.print(node).trim()}`);
 }
 
-/** The schema registered as `name`, or one registered empty, to be filled when its class is read. */
+/** The dotted text of a name or of attributes of a name (`Proxies.OfIndexed.Map`), or null for another expression. */
+function head(node: any): string | null {
+  if (node instanceof Py.Attribute) {
+    const held = head(node.value);
+    return held === null ? null : `${held}.${(node as any).attr.spelling}`;
+  }
+  return node instanceof Py.Name ? spelling(node) : null;
+}
+
 /** The schema registered as `named`, or, where the module has a class of that name, one registered empty, to be filled
  * when that class is read: a union or an intersection where the class says so (`KIND`), else an object schema. A name
  * that is neither is refused: reading never makes up a schema. */
@@ -661,7 +691,7 @@ function aliasSchema(schemas: Stores.Store, module: Py.Module, named: string, al
     return schemas.registered(named);
   }
   const native = value instanceof Py.Name && NATIVES.includes(spelling(value));
-  if (!native && !(value instanceof Py.Subscript && value.value instanceof Py.Name && ["list", "dict"].includes(spelling(value.value)))) {
+  if (!native && !(value instanceof Py.Subscript && ["list", "dict", MAP].includes(head(value.value) as string))) {
     throw new ValueError(`${named}: cannot read the alias of ${Python312.print(value).trim()}`);
   }
   if (READING.has(named)) throw new ValueError(`${named}: a list that holds itself through aliases alone has no Python form`);
@@ -877,8 +907,9 @@ function branchesOf(node: any): any[] {
 /** The name a branch has unless its alias says otherwise, from its annotation, as `convention` from its type. */
 function namedConvention(node: any): string {
   if (node instanceof Py.Subscript && node.value instanceof Py.Name && spelling(node.value) === "Annotated") return namedConvention((node.slice as any).elts[0]);
-  const named = spelling(node instanceof Py.Subscript ? node.value : node);
-  return NATIVES.includes(named) || node instanceof Py.Subscript ? named : snakeCase(named);
+  if (node instanceof Py.Subscript) return head(node.value) === MAP ? "dict" : spelling(node.value);
+  const named = spelling(node);
+  return NATIVES.includes(named) ? named : snakeCase(named);
 }
 
 function readAlias(store: Stores.Combined, match: Record<string, unknown>): Map<string, unknown> {

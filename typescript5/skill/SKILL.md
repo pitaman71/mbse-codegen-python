@@ -130,7 +130,8 @@ check(proxy.items.map((entry: any) => entry.since).join() === "2020", "proxies")
    list is a type alias of what it holds (`type Word = str`, `type Names = list[Word]`, `NativeAlias`, `ListAlias`),
    which a field names; `AliasSchema` reads any alias back. What an annotation cannot say is `Annotated` metadata: a
    width (`Annotated[int, {"bits": 32}]`), an extent (`{"minimum": 1, "maximum": 3}`), a native's own description, a
-   `python3` token (`{"native": ["python3", "int"]}`).
+   `python3` token (`{"native": ["python3", "int"]}`). A list keyed by a `float`, a list or a value object is
+   mbse-schemas' `Proxies.OfIndexed.Map[K, V]`, which compares keys as schema equality does; others are `dict[K, V]`.
    `Types.missing(session)` lists the object schemas left without a class.
 3. **What reads back.** A `@dataclass` class (`@dataclass(...)` too) whose annotations are written as `Dataclass`
    writes them, `| None` or not; anything else raises `ValueError` naming the field. Reading registers the schemas in

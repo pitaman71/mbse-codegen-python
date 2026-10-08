@@ -92,8 +92,8 @@ not report it, and reading back did not restore it. 0.9.1 writes and reads each,
 | Construct | Python bridge | Ambiguity, as a parameter | Status |
 |---|---|---|---|
 | Positional list | `list[T]` | none | built |
-| Keyed by a basic native | `dict[K, V]` | none | built |
-| Keyed by a value object, union or intersection | `dict[K, V]` | none, but K's class must be hashable, so K's step must take `frozen=True`: a constraint between two steps | feasible |
+| Keyed by a native a `dict` compares as schema equality does (`str`, `int`, `bool`, `bytes`) | `dict[K, V]` | none | built |
+| Keyed by a `float`, a list, a value object, a union or an intersection | `Proxies.OfIndexed.Map[K, V]`, mbse-schemas' keyed list (CODEGEN.md, Resolved, Keys a `dict` cannot hold faithfully) | none: the user decided the form; keys need not be hashable, so no class must be frozen | built (0.13). Until 0.13 a `float` key was a `dict`, which lost `-0.0` against `0.0` and every NaN |
 | Extent with int bounds | `Annotated[list[T], {"minimum": 0, "maximum": 9}]`, the maximum only where it has one | none: a fixed `tuple[T, T, T]` was considered, but an extent bounds a list's keys, not how many items it holds | built (0.11) |
 | Extent with a term | the term, rendered by `Codegen/Expressions` | | waits on Codegen/Expressions |
 | Named list (`Names`) | `type Names = list[str]`, a dict keyed by a named native too | none | built (0.10) |
@@ -115,7 +115,7 @@ not report it, and reading back did not restore it. 0.9.1 writes and reads each,
 | Schemas of one store | one module, classes and aliases in name order | none | built |
 | Dotted names (`Codegen.Output`) | a package per prefix (`Codegen/__init__.py` holding `Output`), which spells the name exactly | `layout`: one package per prefix, or the module given, whose dotted names stay a problem. Mangling them into one name would rename, which the policy above rules out | feasible |
 | A name Python cannot spell | written as it is, flagged by mbse-programs' validation, an error when the source is taken | none: the policy, not a bridge. A name is the schema's to configure; codegen never renames | built (0.4) |
-| Instances that serialize and validate as the store's objects | the module binds its classes to the schemas (mbse-schemas' `Bindings`), so `to_plain` and `from_plain` give the wire form | `bound`: whether generated code depends on mbse-schemas at run time | feasible |
+| Instances that serialize and validate as the store's objects | the module binds its classes to the schemas (mbse-schemas' `Bindings`), so `to_plain` and `from_plain` give the wire form | `bound`: whether generated code depends on mbse-schemas at run time. A module holding a `Proxies.OfIndexed.Map` already does (0.13) | feasible |
 
 ## Not bridged on purpose
 
@@ -134,8 +134,8 @@ not report it, and reading back did not restore it. 0.9.1 writes and reads each,
    and wrote, by role, as relations whose entries hold their paths.
 4. The deterministic rows without parameters: named natives and lists as aliases (0.10, done), widths, natives' own
    descriptions and extents with int bounds (0.11, done), `python3` tokens (0.12, done).
-5. The rows with a parameter: other formats' natives (`host`), inline schemas (`name`), keys of schemas (`frozen`
-   coupling), dotted names (`layout`).
+5. The rows with a parameter: other formats' natives (`host`), inline schemas (`name`), dotted names (`layout`); keys
+   of schemas need none (0.13, done).
 6. Bindings (`bound`).
 7. Value parameters and applications, once their `form` options are chosen.
 8. Rows that wait on other repositories: terms (Codegen/Expressions), type parameters and anonymous adjacencies

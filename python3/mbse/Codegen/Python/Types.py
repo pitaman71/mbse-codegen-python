@@ -147,17 +147,11 @@ def _simple(type_: E.Writer) -> E.Writer:
         lambda either, other: E.operation("or", either, other), named)))
 
 
-def _key(type_: E.Writer) -> E.Writer:
-    """Whether a list's key renders: a basic native, or a named one, whose alias names it."""
-    named = P.Exists(lambda q: q.symbols({"x": S.OfNative.Schema}).requires(x.get("name").eq(type_.get("named").get("name"))))
-    return _basic(type_).or_(E.operation("and", type_.has("named"), named))
-
-
 Rendered = P.OfPredicate.Builder().name("Codegen.Rendered").parameters(lambda q: q.name("t")).create()
 """Whether `Dataclass` renders a type `t`: a simple one, or a list of one it renders, its extent if any of int bounds,
-positional or keyed by a native, basic or named, nested to any depth. It applies itself to the list's item."""
+positional or keyed by a type it renders, nested to any depth. It applies itself to the list's item."""
 P.OfPredicate.Builder(Rendered).requires(_simple(t).or_(t.has("indexed").and_(_bounded(t.get("indexed"))).and_(
-    t.get("indexed").has("key").not_().or_(_key(t.get("indexed").get("key")))).and_(
+    t.get("indexed").has("key").not_().or_(Rendered(t.get("indexed").get("key")))).and_(
     Rendered(t.get("indexed").get("item"))))).update()
 
 
@@ -228,10 +222,28 @@ def _annotated(held: Any, facets: dict[str, Any]) -> Any:
         lambda x: x.Tuple().add_elts(held).add_elts(_metadata(facets)))
 
 
+MAP = "Proxies.OfIndexed.Map"
+"""mbse-schemas' keyed list, which generated code holds where a `dict` cannot compare keys as schema equality does."""
+
+
+def _mapped(key: Any) -> bool:
+    """Whether a list keyed by `key` is a `Proxies.OfIndexed.Map`, not a `dict`: a key that is not a native, or a
+    `float`, whose NaNs and `-0.0` a `dict` compares otherwise (mbse-schemas' EQUALITY.md)."""
+    structure = S.structure(key)
+    return not isinstance(structure, S.OfNative.Data) or structure.token.name == "float"
+
+
+def _dotted(builder: Any, text: str) -> Any:
+    """`a.b.c` as names and attributes."""
+    *head, last = text.split(".")
+    return builder.Attribute().value(lambda x: _dotted(x, ".".join(head))).attr(last) if head else _name(builder, last)
+
+
 def _structure_annotation(type_: Any) -> Any:
-    """The annotation of what a type holds, its name aside: a native's, or a list's of its items."""
+    """The annotation of what a type holds, its name aside: a native's, or a list's of its items, keyed by a `dict` or,
+    where a `dict` cannot compare its keys as schema equality does, a `Proxies.OfIndexed.Map`."""
     if isinstance(type_, S.OfIndexed.Data) and type_.key is not None:
-        return lambda b: b.Subscript().value(lambda x: _name(x, "dict")).slice(
+        return lambda b: b.Subscript().value(lambda x: _dotted(x, MAP if _mapped(type_.key) else "dict")).slice(
             lambda x: x.Tuple().add_elts(_annotation(type_.key)).add_elts(_annotation(type_.item)))
     if isinstance(type_, S.OfIndexed.Data):
         return lambda b: b.Subscript().value(lambda x: _name(x, "list")).slice(_annotation(type_.item))
@@ -251,23 +263,31 @@ def _quoted(text: str) -> str:
 
 
 
+_SOURCES = ("__future__", "dataclasses", "typing", "mbse.Schemas.Framework")
+"""The modules the steps import from, in the order their imports come."""
+
+
 def _require(module: Py.Module, source: str, name: str) -> None:
-    """Imports `name` from `source`, once, after `from __future__ import annotations`, the imports in the order
-    `dataclasses`, `typing`, whichever step needs them first."""
+    """Imports `name` from `source`, once, after `from __future__ import annotations`, the imports in the order of
+    `_SOURCES`, whichever step needs them first."""
     B = Py.LANGUAGE.Builders
     imports = [statement for statement in module.body if isinstance(statement, Py.ImportFrom)]
     if not imports:
         imports = [B.ImportFrom().module(lambda d: d.add_names("__future__")).add_names(
             lambda a: a.name(lambda d: d.add_names("annotations"))).create()]
         module.body.insert(0, imports[0])
-    found = next((i for i in imports if i.module.names[0].spelling == source), None)
+    found = next((i for i in imports if _dotted_name(i.module) == source), None)
     if found is None:
-        found = B.ImportFrom().module(lambda d: d.add_names(source)).create()
-        position = 2 if source == "typing" else 1  # dataclasses is always needed first
-        module.body.insert(position, found)
+        found = B.ImportFrom().module(lambda d: functools.reduce(lambda b, part: b.add_names(part), source.split("."), d)).create()
+        module.body.insert(sum(1 for i in imports if _SOURCES.index(_dotted_name(i.module)) < _SOURCES.index(source)), found)
     names = [alias.name.names[0].spelling for alias in found.names]
     if name not in names:  # in name order, whichever step needs it first
         found.names.insert(sum(1 for other in names if other < name), B.Alias().name(lambda d: d.add_names(name)).create())
+
+
+def _dotted_name(name: Any) -> str:
+    """A `DottedName`'s text."""
+    return ".".join(part.spelling for part in name.names)
 
 
 def _decorator(schema: Any, frozen: bool) -> Any:
@@ -323,9 +343,12 @@ def _optional_field(name: str, annotation: Any, description: str | None = None) 
 
 
 def _annotations(module: Py.Module, built: Any) -> None:
-    """Imports `Annotated` where `built` uses it."""
-    if any(isinstance(node, Py.Name) and _spelling(node) == "Annotated" for node in Trees.walk(built)):
+    """Imports `Annotated` and mbse-schemas' `Proxies` where `built` uses them."""
+    used = {_spelling(node) for node in Trees.walk(built) if isinstance(node, Py.Name)}
+    if "Annotated" in used:
         _require(module, "typing", "Annotated")
+    if "Proxies" in used:
+        _require(module, "mbse.Schemas.Framework", "Proxies")
 
 
 def _class_text(name: str, text: str) -> Any:
@@ -568,7 +591,7 @@ NativeAlias = T.Transform("NativeAlias", _over({"s": S.OfNative.Schema}, _NAMED.
 """A named native Python's types hold (see `_pythonic`) as a type alias of Python's type for it (`type Word = str`), as a
 proxy reads its value."""
 ListAlias = T.Transform("ListAlias", _over({"s": S.OfIndexed.Schema}, _NAMED.and_(_bounded(s)).and_(
-    s.has("key").not_().or_(_key(s.get("key")))).and_(_rendered(s.get("item")))),
+    s.has("key").not_().or_(_rendered(s.get("key")))).and_(_rendered(s.get("item")))),
     _over({"s": S.OfIndexed.Schema}, _HAS_ALIAS), rewrite=_render_named)
 """A named list as a type alias of `list[T]` or `dict[K, T]` (`type Names = list[str]`), as a proxy reads its value."""
 """A named intersection as a class of a field per part, as a proxy's intersection value reads it, its class variable
@@ -637,11 +660,10 @@ def _type(schemas: Stores.Store, annotation: Any, where: str, module: Py.Module)
         name = _spelling(annotation)
         return S.OfNative.Data({"bool": bool, "int": int, "float": float, "str": str, "bytes": bytes}[name]) if (
             name in NATIVES) else _named(schemas, name, module, where)
-    container = _spelling(annotation.value) if isinstance(annotation, Py.Subscript) and isinstance(
-        annotation.value, Py.Name) else None
+    container = _head(annotation.value) if isinstance(annotation, Py.Subscript) else None
     if container == "list":
         return S.OfIndexed.Builder().of(_type(schemas, annotation.slice, where, module)).create()
-    if container == "dict" and isinstance(annotation.slice, Py.Tuple) and len(annotation.slice.elts) == 2:
+    if container in ("dict", MAP) and isinstance(annotation.slice, Py.Tuple) and len(annotation.slice.elts) == 2:
         key, item = (_type(schemas, element, where, module) for element in annotation.slice.elts)
         return S.OfIndexed.Builder().key(key).of(item).create()
     raise ValueError(f"{where}: cannot read the annotation {Python312.print(annotation).strip()}")
@@ -658,6 +680,14 @@ def _faceted(type_: Any, facets: dict[str, Any]) -> Any:
         builder = S.OfIndexed.Builder(type_)
         builder = builder.extent(facets["minimum"], facets.get("maximum")) if "minimum" in facets else builder
     return _described(builder, facets.get("description"))
+
+
+def _head(node: Any) -> str | None:
+    """The dotted text of a name or of attributes of a name (`Proxies.OfIndexed.Map`), or None for another expression."""
+    if isinstance(node, Py.Attribute):
+        held = _head(node.value)
+        return None if held is None else f"{held}.{node.attr.spelling}"
+    return _spelling(node) if isinstance(node, Py.Name) else None
 
 
 def _named(schemas: Stores.Store, name: str, module: Py.Module, where: str = "") -> Any:
@@ -697,8 +727,7 @@ def _alias_schema(schemas: Stores.Store, module: Py.Module, name: str, alias: An
         schemas.register(S.OfUnion.Builder().name(name).flat().create())
         return schemas.registered(name)
     native = isinstance(value, Py.Name) and _spelling(value) in NATIVES
-    if not native and not (isinstance(value, Py.Subscript) and isinstance(value.value, Py.Name)
-                           and _spelling(value.value) in ("list", "dict")):
+    if not native and not (isinstance(value, Py.Subscript) and _head(value.value) in ("list", "dict", MAP)):
         raise ValueError(f"{name}: cannot read the alias of {Python312.print(value).strip()}")
     if name in _READING:
         raise ValueError(f"{name}: a list that holds itself through aliases alone has no Python form")
@@ -922,9 +951,10 @@ def _named_convention(node: Any) -> str:
     """The name a branch has unless its alias says otherwise, from its annotation, as `_convention` from its type."""
     if isinstance(node, Py.Subscript) and isinstance(node.value, Py.Name) and _spelling(node.value) == "Annotated":
         return _named_convention(node.slice.elts[0])
-    head = node.value if isinstance(node, Py.Subscript) else node
-    name = _spelling(head)
-    return name if name in NATIVES or isinstance(node, Py.Subscript) else _snake(name)
+    if isinstance(node, Py.Subscript):
+        return "dict" if _head(node.value) == MAP else _spelling(node.value)
+    name = _spelling(node)
+    return name if name in NATIVES else _snake(name)
 
 
 def _read_alias(store: Stores.Combined, match: dict[str, Any], arguments: dict[str, Any]) -> dict[str, Any]:

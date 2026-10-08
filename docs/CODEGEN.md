@@ -51,11 +51,18 @@ requires.
   there is one to take, will be a parameter of the schema's step.
 - **What renders**: a basic native as Python's name for it (`str`, `int`, `float`, `bool`, `bytes`), without a width
   or a description of its own, which Python's type cannot hold, a named
-  object schema, union, intersection, native or list by its name, a positional list as `list[...]` and a list keyed by
-  a native, basic or named, as `dict[K, V]`, of any of these, nested to any depth: `Types.Rendered` is a predicate that
+  object schema, union, intersection, native or list by its name, a positional list as `list[...]` and a keyed list as
+  `dict[K, V]` or `Proxies.OfIndexed.Map[K, V]` (see Keyed lists), of any of these, nested to any depth: `Types.Rendered` is a predicate that
   applies itself to a list's item (mbse-patterns 0.8.2). A width or an extent that is a term, a native with
   parameters, and an application have no Python form yet: a schema with such a property has no candidate, rather than
   a dataclass field that names nothing.
+- **Keyed lists**, as decided (see Resolved): a list keyed by a native a `dict` compares as schema equality does (`str`,
+  `int`, `bool`, `bytes`, named or not) is `dict[K, V]`; any other key (a `float`, whose NaNs a `dict` never matches
+  and whose `-0.0` it merges with `0.0`, a list, a value object, a union, an intersection) makes it mbse-schemas'
+  `Proxies.OfIndexed.Map[K, V]`, which compares keys as schema equality does (mbse-schemas' EQUALITY.md) and is read
+  with plain keys, as proxies' keyed lists are: `survey.weights[float("nan")]` reads either. A generated value object
+  is a key by its class and the fields it has set. The module then imports `from mbse.Schemas.Framework import
+  Proxies`, its one run-time dependency on mbse-schemas, and only where a keyed list needs it.
 - **What an annotation cannot say is `Annotated` metadata** (0.11): a native's width (`Annotated[int, {"bits": 32}]`),
   a list's extent (`Annotated[list[Phone], {"minimum": 1, "maximum": 3}]`, the maximum only where it has one) and a
   native's or a list's own description, inline or in a named one's alias (`type Byte = Annotated[int, {"bits": 8,
@@ -152,6 +159,12 @@ requires.
   beside the classes) is Codegen/Patterns' work, with the constraints.
 
 ## Resolved
+
+- **Keys a `dict` cannot hold faithfully**, as the user decided: "dict keyed by a wrapper", and of where the wrapper
+  lives, "(b)": in mbse-schemas, as a run-time class generated code imports, so that one implementation compares keys
+  as schema equality does. The wrapper is `Proxies.OfIndexed.Map`, which wraps keys within, so code reads it with
+  plain keys as it reads a proxy's keyed list (0.13; mbse-schemas 0.9.2). It replaces 0.3's `dict[float, V]`, which
+  merged `-0.0` with `0.0` and never matched a NaN, a silent loss.
 
 - A named native is a type alias, not a `NewType` (0.10): a `NewType` cannot hold the `Annotated` metadata that
   carries a description or a width, and a proxy's value is the plain host value either way.
