@@ -113,7 +113,7 @@ not report it, and reading back did not restore it. 0.9.1 writes and reads each,
 | Construct | Python bridge | Ambiguity, as a parameter | Status |
 |---|---|---|---|
 | Schemas of one store | one module, classes and aliases in name order | none | built |
-| Dotted names (`Codegen.Output`) | a package per prefix (`Codegen/__init__.py` holding `Output`), which spells the name exactly | `layout`: one package per prefix, or the module given, whose dotted names stay a problem. Mangling them into one name would rename, which the policy above rules out | feasible |
+| Dotted names (`Codegen.Output`) | a class nested in the class of its prefix, its `__qualname__` the schema's name (CODEGEN.md, Resolved, Dotted names are nested classes) | none: the user decided the form, so there is no `layout` | built (0.14) |
 | A name Python cannot spell | written as it is, flagged by mbse-programs' validation, an error when the source is taken | none: the policy, not a bridge. A name is the schema's to configure; codegen never renames | built (0.4) |
 | Instances that serialize and validate as the store's objects | the module binds its classes to the schemas (mbse-schemas' `Bindings`), so `to_plain` and `from_plain` give the wire form | `bound`: whether generated code depends on mbse-schemas at run time. A module holding a `Proxies.OfIndexed.Map` already does (0.13) | feasible |
 
@@ -134,8 +134,8 @@ not report it, and reading back did not restore it. 0.9.1 writes and reads each,
    and wrote, by role, as relations whose entries hold their paths.
 4. The deterministic rows without parameters: named natives and lists as aliases (0.10, done), widths, natives' own
    descriptions and extents with int bounds (0.11, done), `python3` tokens (0.12, done).
-5. The rows with a parameter: inline schemas (`name`), dotted names (`layout`); keys of schemas need none (0.13,
-   done), and other formats' natives are not bridged (no `host`).
+5. The rows with a parameter: inline schemas (`name`), awaiting the user's decision; keys of schemas (0.13) and
+   dotted names (0.14) need none, and other formats' natives are not bridged (no `host`).
 6. Bindings (`bound`).
 7. Value parameters and applications, once their `form` options are chosen.
 8. Rows that wait on other repositories: terms (Codegen/Expressions), type parameters and anonymous adjacencies

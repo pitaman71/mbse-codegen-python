@@ -127,8 +127,18 @@ requires.
   links each step to its match.
 - **Each step links what it wrote** (0.9.2, mbse-patterns 0.9), by role: `Dataclass`, `Entry`, `Union` and
   `Intersection` a `class`, `Alias` an `alias`, and reading back a `schema`. Within the session the link is the
-  element (`session.wrote(cls)` is the step that wrote it); a trace names it by its path when written
-  (`Codegen.Output/modules[0]/children[4]`, positional, since a syntax node has no name of its own).
+  element (`session.wrote(cls)` is the step that wrote it); a trace names it by its path when written, by its
+  qualified name in `Codegen.Defined` (`Codegen.Output/defined[name="Phone"]`), wherever the class is (0.14).
+- **Dotted names are nested classes** (0.14; see Resolved): `Codegen.Output` is a class `Output` nested in the class
+  `Codegen`, whose `__qualname__` is the schema's name, so it is spelled, not renamed. The prefix's class is its own
+  schema's dataclass where it has one (fields first, then what it holds, in name order), else a class that only holds
+  others; a class written after those nested in its place takes them in, so the module does not depend on the order of
+  the steps. Annotations write dotted names as attributes (`tuple[Books.Held, ...]`), which `from __future__ import
+  annotations` resolves from the module. A nested class under the name of a field of the class holding it is in
+  `Types.problems`; a prefix that is a type alias holds no class, which stays at module level named as given, a name
+  Python cannot spell, whichever step comes first. What the module defines is read by qualified name through
+  `Codegen.Defined`, a relation of the output derived from the module whenever it is read, which every step's after,
+  reading back and `missing` use.
 - **Reading back** registers each class's schema in the store given; a class a field names before its own step is
   registered empty, which `Schema`'s after does not take for that class's schema unless the class has no fields, and is
   filled when the class is read. An annotation `Dataclass` does not write is refused, naming the field (`Bad.x: cannot
@@ -157,6 +167,12 @@ requires.
   beside the classes) is Codegen/Patterns' work, with the constraints.
 
 ## Resolved
+
+- **Dotted names are nested classes**, as the user asked ("what about nested classes?") and decided, case by case: a
+  prefix that is also a schema's name, its class holds those nested in it, "(a)", and of a nested class under the
+  name of one of that class's fields, "validation flags it"; a prefix that is a type alias, which cannot hold a
+  class: "agreed", flagged; a class that only holds others, a namespace, which Python more often makes a module:
+  "okay for now" (0.14). It replaces the `layout` parameter (packages per prefix), which needed several modules.
 
 - **Natives codegen supports**, as the user decided: "only python native and basic can be supported for codegen." A
   native of another format (`ccpp` `int32_t`, `typescript5` `number`) is not bridged: no Python type is chosen to

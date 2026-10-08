@@ -67,8 +67,13 @@ KEYWORDS = ("False", "None", "True", "and", "as", "assert", "async", "await", "b
 """Python's keywords: a field so named is written with a trailing underscore (`from_`), and read back without it."""
 
 Generated = S.OfRelation.Builder().name("Codegen.Generated").links("output", "module").create()
+Defined = S.OfRelation.Builder().name("Codegen.Defined").links("output", "node").properties(
+    lambda p: p.name("name").of(lambda t: t.as_native(str))).unique("output", "name").create()
+"""What the module defines by qualified name (`Codegen.Output`): each dataclass and type alias, nested ones included;
+derived from the module whenever the output is read, so it is never out of date. A name is unique, so a written trace
+names a class by it (`Codegen.Output/defined[name="Contact"]`, mbse-schemas' `Paths`), wherever the class is."""
 _OutputSchema = S.OfObject.Builder().name(OUTPUT).ref().singleton(OUTPUT).relations(
-    lambda r: r.name("modules").of(Generated).me("output")).create()
+    lambda r: r.name("modules").of(Generated).me("output"), lambda r: r.name("defined").of(Defined).me("output")).create()
 
 
 class Output:
@@ -93,15 +98,18 @@ class Output:
 
 
 _BINDING = Bindings.Binding(
-    _OutputSchema, lambda output: Bindings.State(
-        {}, {"modules": [Bindings.Entry({"module": m}) for m in ([] if output.module is None else [output.module])]}),
+    _OutputSchema, lambda output: Bindings.State({}, {
+        "modules": [Bindings.Entry({"module": m}) for m in ([] if output.module is None else [output.module])],
+        "defined": [Bindings.Entry({"node": node}, {"name": name})
+                    for name, node in ({} if output.module is None else _definitions(output.module)).items()]}),
     lambda state: Output(*[e.links["module"] for e in state.entries.get("modules", [])]))
 
 
 def store(schemas: Stores.Store, module: Py.Module) -> Stores.Combined:
     """The store a session runs over: the schemas `schemas` registers and those they refer to, Python's syntax trees,
     and the output, which holds `module`."""
-    outputs = Bindings.OfStore([(_OutputSchema, lambda instance=None: Bindings.Builder(_BINDING, instance))], [Generated])
+    outputs = Bindings.OfStore([(_OutputSchema, lambda instance=None: Bindings.Builder(_BINDING, instance))],
+                               [Generated, Defined])
     outputs.singleton(OUTPUT).module = module
     return Stores.Combined(Reflection.of(schemas), Py.LANGUAGE.Builders, outputs)
 
@@ -184,8 +192,10 @@ _ENTRY_RENDERABLE = E.operation("and", r.has("name").and_(r.has("parameters").no
     r.get("links").all("l", P.Exists(lambda q: q.symbols({"y": S.OfObject.Schema}).requires(_declares(y, l)))))
 """Whether `Entry` renders the relation `r`: named, without parameters, its properties' types rendered, and each link
 declared by an object schema, which types it."""
-_HAS_CLASS = P.Exists(lambda q: q.symbols({"c": Py.ClassDef.Schema}).requires(
-    P.Contains(c.children, lambda e: e.property == "name" and e.child.spelling == s.name)))
+o = E.variable("o")
+_HAS_CLASS = P.Exists(lambda q: q.symbols({"o": _OutputSchema}).requires(
+    P.Contains(o.defined, lambda e: e.name == s.name and e.node.kind == "ClassDef")))
+"""Whether the module defines a class named after `s`, by its qualified name."""
 
 
 def _name(builder: Any, spelling: str) -> Any:
@@ -193,9 +203,9 @@ def _name(builder: Any, spelling: str) -> Any:
 
 
 def _annotation(type_: Any) -> Any:
-    """The annotation of a type `Dataclass` renders: a named schema by its name, or what it holds, in `Annotated` with
-    what that annotation cannot say."""
-    return (lambda b: _name(b, type_.name)) if type_.name is not None else _annotated(_structure_annotation(type_), _facets(type_))
+    """The annotation of a type `Dataclass` renders: a named schema by its name, a dotted one as attributes
+    (`Codegen.Output`, a nested class), or what it holds, in `Annotated` with what that annotation cannot say."""
+    return (lambda b: _dotted(b, type_.name)) if type_.name is not None else _annotated(_structure_annotation(type_), _facets(type_))
 
 
 def _facets(type_: Any) -> dict[str, Any]:
@@ -303,8 +313,8 @@ def _decorator(schema: Any, frozen: bool) -> Any:
 
 def _union(names: list[str]) -> Any:
     """`A | B | ...` of the names, in order."""
-    return functools.reduce(lambda left, name: lambda b: b.BinOp().left(left).op("|").right(lambda x: _name(x, name)),
-                            names[1:], lambda b: _name(b, names[0]))
+    return functools.reduce(lambda left, name: lambda b: b.BinOp().left(left).op("|").right(lambda x: _dotted(x, name)),
+                            names[1:], lambda b: _dotted(b, names[0]))
 
 
 def _strings(values: list[Any]) -> Any:
@@ -392,7 +402,7 @@ def _render(store: Stores.Combined, match: dict[str, Any], arguments: dict[str, 
     for name, adjacency in schema.adjacencies.items():
         relation = adjacency.relation
         entries = lambda b, relation=relation: b.Subscript().value(lambda x: _name(x, "tuple")).slice(  # noqa: E731
-            lambda x: x.Tuple().add_elts(lambda y: _name(y, relation.name)).add_elts(lambda y: y.Constant().spelling("...")))
+            lambda x: x.Tuple().add_elts(lambda y: _dotted(y, relation.name)).add_elts(lambda y: y.Constant().spelling("...")))
         metadata = {} if adjacency.description is None else {"description": adjacency.description}
         if len({a.me for a in schema.adjacencies.values() if a.relation is relation}) > 1:  # which link, where ambiguous
             metadata["me"] = adjacency.me
@@ -427,12 +437,94 @@ def _defined(statement: Any) -> str | None:
     return statement.name.id.spelling if isinstance(statement, Py.TypeAlias) else None
 
 
+def _is_dataclass(statement: Any) -> bool:
+    """Whether a statement is a class decorated `@dataclass` or `@dataclass(...)`."""
+    return isinstance(statement, Py.ClassDef) and any(
+        isinstance(d, Py.Name) and _spelling(d) == "dataclass" or isinstance(d, Py.Call) and isinstance(d.func, Py.Name)
+        and _spelling(d.func) == "dataclass" for d in statement.decorator_list)
+
+
+def _definitions(module: Py.Module) -> dict[str, Any]:
+    """The dataclasses and type aliases of the module by qualified name, nested ones within the classes that hold them
+    (`Codegen.Output` within `class Codegen`), in the order they come; a class that only holds others is no
+    definition of its own."""
+    found: dict[str, Any] = {}
+
+    def visit(statements: list[Any], prefix: str) -> None:
+        for statement in statements:
+            name = _defined(statement)
+            if name is not None and (_is_dataclass(statement) or isinstance(statement, Py.TypeAlias)):
+                found[prefix + name] = statement
+            if isinstance(statement, Py.ClassDef):
+                visit(statement.body, f"{prefix}{name}.")
+
+    visit(module.body, "")
+    return found
+
+
+def _qualified(module: Py.Module, statement: Any) -> str:
+    """The qualified name of a dataclass or a type alias of the module (`Codegen.Output`)."""
+    return next(name for name, defined in _definitions(module).items() if defined is statement)
+
+
+def _rename(statement: Any, spelling: str) -> None:
+    """Gives a class or a type alias the name `spelling`."""
+    named = Py.LANGUAGE.Builders.Identifier().spelling(spelling).create()
+    if isinstance(statement, Py.ClassDef):
+        statement.name = named
+    else:
+        statement.name.id = named
+
+
+def _insert(body: list[Any], built: Any) -> None:
+    """Inserts a class or a type alias among the definitions of a module's or a class's body, in name order, after what
+    else the body holds (imports, a docstring, fields); a body that was only `pass` holds it instead."""
+    if len(body) == 1 and isinstance(body[0], Py.Pass):
+        body.clear()
+    after = [i for i, statement in enumerate(body) if (_defined(statement) or "") > _defined(built)]
+    body.insert(after[0] if after else len(body), built)
+
+
+def _unnest(module: Py.Module, statement: Any, prefix: str) -> None:
+    """Moves a definition held under `prefix` to module level, named by its qualified name, which validation flags: a
+    class that only holds others moves what it holds instead."""
+    if isinstance(statement, Py.ClassDef) and not _is_dataclass(statement):
+        for nested in statement.body:
+            _unnest(module, nested, f"{prefix}.{_defined(statement)}")
+        return
+    _rename(statement, f"{prefix}.{_defined(statement)}")
+    _insert(module.body, statement)
+
+
 def _place(module: Py.Module, built: Any) -> None:
-    """Places a class or a type alias among the module's in name order, so that the module does not depend on the order
-    of the steps."""
-    name = _defined(built)
-    after = [i for i, statement in enumerate(module.body) if (_defined(statement) or "") > name]
-    module.body.insert(after[0] if after else len(module.body), built)
+    """Places a class or a type alias, named as its schema is, in the module, so that the module does not depend on the order
+    of the steps: a dotted name (`Codegen.Output`) as a class nested in the class of its prefix, the prefix's own
+    dataclass where it has one (a class written later takes in those nested in its place), else a class that only holds
+    others. A prefix that is a type alias cannot hold a class: the class stays at module level, named as given, which
+    validation flags."""
+    *prefix, last = _defined(built).split(".")
+    body: list[Any] = module.body
+    for part in prefix:
+        held = next((statement for statement in body if _defined(statement) == part), None)
+        if isinstance(held, Py.TypeAlias):
+            _insert(module.body, built)
+            return
+        if held is None:
+            held = Py.LANGUAGE.Builders.ClassDef().name(part).create()
+            held.body = []
+            _insert(body, held)
+        body = held.body
+    _rename(built, last)
+    holder = next((statement for statement in body if _defined(statement) == last and isinstance(statement, Py.ClassDef)
+                   and not _is_dataclass(statement)), None)
+    if holder is not None:
+        body.remove(holder)
+        for nested in holder.body:
+            if isinstance(built, Py.ClassDef):
+                _insert(built.body, nested)
+            else:  # an alias cannot hold them: at module level, named as given, as if the alias had come first
+                _unnest(module, nested, ".".join([*prefix, last]))
+    _insert(body, built)
 
 
 Dataclass = T.Transform(
@@ -442,8 +534,8 @@ Dataclass = T.Transform(
 
 Entry = T.Transform(
     "Entry", _over({"r": S.OfRelation.Schema}, _ENTRY_RENDERABLE), _over({"r": S.OfRelation.Schema}, P.Exists(
-        lambda q: q.symbols({"c": Py.ClassDef.Schema}).requires(
-            P.Contains(c.children, lambda e: e.property == "name" and e.child.spelling == r.name)))), rewrite=_render_entry)
+        lambda q: q.symbols({"o": _OutputSchema}).requires(
+            P.Contains(o.defined, lambda e: e.name == r.name and e.node.kind == "ClassDef")))), rewrite=_render_entry)
 """A relation as the class of its entries: a field per link, typed by the object schemas that declare it, then one per
 property, and class variables `LINKS` and `UNIQUES` that say which fields are links and what is unique."""
 
@@ -555,11 +647,10 @@ def _variants(kind: str, meta: Any) -> T.Transform:
         _render_variants(kind))
 
 
-al, nm = E.variable("al"), E.variable("nm")
-_HAS_ALIAS = P.Exists(lambda q: q.symbols({"al": Py.TypeAlias.Schema, "nm": Py.Name.Schema}).requires(
-    P.Contains(al.children, lambda e: e.property == "name" and e.child == nm)).requires(
-    P.Contains(nm.children, lambda e: e.property == "id" and e.child.spelling == s.name)))
-"""Whether the module has a type alias named after `s`."""
+al = E.variable("al")
+_HAS_ALIAS = P.Exists(lambda q: q.symbols({"o": _OutputSchema}).requires(
+    P.Contains(o.defined, lambda e: e.name == s.name and e.node.kind == "TypeAlias")))
+"""Whether the module defines a type alias named after `s`, by its qualified name."""
 
 
 Union = _variants("union", S.OfUnion.Schema)
@@ -632,15 +723,17 @@ def _counted(fields: E.Writer) -> E.Writer:
 
 _COUNTED = t.has("singleton").and_(_counted(_FIELDS.sub(1))).or_(t.has("singleton").not_().and_(_counted(_FIELDS)))
 """Whether `t` has a property or an adjacency per field of `c`, its `SINGLETON` aside."""
+_C_IS_T = P.Exists(lambda q: q.symbols({"o": _OutputSchema}).requires(
+    P.Contains(o.defined, lambda e: e.node == c and e.name == t.name)))
+"""Whether the class `c` is named after the schema `t`, by its qualified name."""
+_C_IS_R = P.Exists(lambda q: q.symbols({"o": _OutputSchema}).requires(
+    P.Contains(o.defined, lambda e: e.node == c and e.name == r.name)))
 _HAS_SCHEMA = E.operation(
-    "or", P.Exists(lambda q: q.symbols({"t": S.OfObject.Schema}).requires(
-        P.Contains(c.children, lambda e: e.property == "name" and e.child.spelling == t.name)).requires(
+    "or", P.Exists(lambda q: q.symbols({"t": S.OfObject.Schema}).requires(_C_IS_T).requires(
         t.has("ref").eq(_UNEQUAL).and_(t.has("description").eq(_DOCUMENTED))).requires(_COUNTED)),
-    E.operation("or", P.Exists(lambda q: q.symbols({"r": S.OfRelation.Schema}).requires(
-        P.Contains(c.children, lambda e: e.property == "name" and e.child.spelling == r.name)).requires(
+    E.operation("or", P.Exists(lambda q: q.symbols({"r": S.OfRelation.Schema}).requires(_C_IS_R).requires(
         r.has("links"))), E.operation("or", *[P.Exists(lambda q, meta=meta, members=members: q.symbols({"t": meta}).requires(
-            P.Contains(c.children, lambda e: e.property == "name" and e.child.spelling == t.name)).requires(
-            t.has(members))) for meta, members in ((S.OfUnion.Schema, "branches"), (S.OfIntersection.Schema, "parts"))])))
+            _C_IS_T).requires(t.has(members))) for meta, members in ((S.OfUnion.Schema, "branches"), (S.OfIntersection.Schema, "parts"))])))
 """Whether the class `c` has been read: an object schema named after it, a reference object's where `c` is
 `eq=False`, described where it has a docstring, with a property or an adjacency per field; or a relation named after it,
 with its links; or a union or an intersection named after it, with its members."""
@@ -656,8 +749,8 @@ def _type(schemas: Stores.Store, annotation: Any, where: str, module: Py.Module)
     if isinstance(annotation, Py.Subscript) and isinstance(annotation.value, Py.Name) and _spelling(annotation.value) == "Annotated":
         held, facets = annotation.slice.elts[0], _literal(annotation.slice.elts[1])
         return _faceted(_type(schemas, held, where, module), facets).update()
-    if isinstance(annotation, Py.Name):
-        name = _spelling(annotation)
+    if isinstance(annotation, (Py.Name, Py.Attribute)) and _head(annotation) is not None:
+        name = _head(annotation)
         return S.OfNative.Data({"bool": bool, "int": int, "float": float, "str": str, "bytes": bytes}[name]) if (
             name in NATIVES) else _named(schemas, name, module, where)
     container = _head(annotation.value) if isinstance(annotation, Py.Subscript) else None
@@ -695,7 +788,7 @@ def _named(schemas: Stores.Store, name: str, module: Py.Module, where: str = "")
     filled when that class is read: a union or an intersection where the class says so (`KIND`), else an object schema.
     A name that is neither is refused: reading never makes up a schema."""
     if name not in schemas.names():
-        cls = next((statement for statement in module.body if _defined(statement) == name), None)
+        cls = _definitions(module).get(name)
         if cls is None:
             raise ValueError(f"{where}: {name} is not a class of the module or a schema of the store")
         if isinstance(cls, Py.TypeAlias):
@@ -806,23 +899,23 @@ def _fields(cls: Any) -> list[Any]:
 
 def _entry_class(module: Py.Module, name: str) -> Any:
     """The entry class (with `LINKS`) named `name` in the module, if any."""
-    return next((statement for statement in module.body if isinstance(statement, Py.ClassDef)
-                 and statement.name.spelling == name and "LINKS" in _class_variables(statement)), None)
+    found = _definitions(module).get(name)
+    return found if isinstance(found, Py.ClassDef) and "LINKS" in _class_variables(found) else None
 
 
 def _alternatives(node: Any) -> list[str]:
-    """The names of `A | B | ...`, in order."""
+    """The names of `A | B | ...`, in order, dotted ones included."""
     if isinstance(node, Py.BinOp) and node.op == "|":
         return [*_alternatives(node.left), *_alternatives(node.right)]
-    return [_spelling(node)] if isinstance(node, Py.Name) else []
+    return [] if _head(node) is None else [_head(node)]
 
 
 def _entries(annotation: Any) -> str | None:
     """The entry class `tuple[R, ...]` holds, or None for another annotation."""
     if isinstance(annotation, Py.Subscript) and isinstance(annotation.value, Py.Name) and (
             _spelling(annotation.value) == "tuple") and isinstance(annotation.slice, Py.Tuple) and len(
-            annotation.slice.elts) == 2 and isinstance(annotation.slice.elts[0], Py.Name):
-        return _spelling(annotation.slice.elts[0])
+            annotation.slice.elts) == 2:
+        return _head(annotation.slice.elts[0])
     return None
 
 
@@ -854,7 +947,7 @@ def _relation(schemas: Stores.Store, module: Py.Module, name: str, where: str) -
 
 def _read_entry(schemas: Stores.Store, module: Py.Module, cls: Any) -> None:
     """Fills the relation an entry class describes: its links, its properties, its uniques and its description."""
-    name = cls.name.spelling
+    name = _qualified(module, cls)
     if name not in schemas.names():
         schemas.register(S.OfRelation.Builder().name(name).create())
     variables = _class_variables(cls)
@@ -875,7 +968,7 @@ def _read_variants(schemas: Stores.Store, module: Py.Module, cls: Any, kind: str
     """Fills the union or intersection a class describes (`KIND`): a branch or part per field, or, flat (`PARTS`), a
     part per entry of `PARTS`, a named object schema or an inline one of the properties it lists; and its
     description."""
-    name = cls.name.spelling
+    name = _qualified(module, cls)
     typed = {_property(_spelling(field.target)): _type(schemas, _optional(field.annotation),
                                                        f"{name}.{_spelling(field.target)}", module)
              for field in _fields(cls)}
@@ -908,7 +1001,8 @@ def _docstring_of(cls: Any) -> str | None:
 def _read_class(store: Stores.Combined, match: dict[str, Any], arguments: dict[str, Any]) -> dict[str, Any]:
     """Reads a class back; what the step wrote, by role: the schema."""
     cls = match["c"]
-    schemas, module, name = _schemas(store), _module(store), cls.name.spelling
+    schemas, module = _schemas(store), _module(store)
+    name = _qualified(module, cls)
     if "LINKS" in _class_variables(cls):
         _read_entry(schemas, module, cls)
         return {"schema": schemas.registered(name)}
@@ -953,14 +1047,15 @@ def _named_convention(node: Any) -> str:
         return _named_convention(node.slice.elts[0])
     if isinstance(node, Py.Subscript):
         return "dict" if _head(node.value) == MAP else _spelling(node.value)
-    name = _spelling(node)
+    name = _head(node)
     return name if name in NATIVES else _snake(name)
 
 
 def _read_alias(store: Stores.Combined, match: dict[str, Any], arguments: dict[str, Any]) -> dict[str, Any]:
     """Reads a type alias back as the schema its value says (see `_alias_schema`); what the step wrote: the schema."""
     alias = match["al"]
-    schemas, module, name = _schemas(store), _module(store), alias.name.id.spelling
+    schemas, module = _schemas(store), _module(store)
+    name = _qualified(module, alias)
     value, metadata = _aliased(alias)
     schema = _named(schemas, name, module)
     if not isinstance(schema, S.OfUnion.Data):  # a native or a list, read in full when it was first named
@@ -977,9 +1072,8 @@ def _read_alias(store: Stores.Combined, match: dict[str, Any], arguments: dict[s
 
 
 _ALIASED = functools.reduce(lambda either, other: E.operation("or", either, other), [
-    P.Exists(lambda q, meta=meta, filled=filled: q.symbols({"t": meta, "nm": Py.Name.Schema}).requires(
-        P.Contains(al.children, lambda e: e.property == "name" and e.child == nm)).requires(
-        P.Contains(nm.children, lambda e: e.property == "id" and e.child.spelling == t.name)).requires(t.has(filled)))
+    P.Exists(lambda q, meta=meta, filled=filled: q.symbols({"t": meta, "o": _OutputSchema}).requires(
+        P.Contains(o.defined, lambda e: e.node == al and e.name == t.name)).requires(t.has(filled)))
     for meta, filled in ((S.OfUnion.Schema, "branches"), (S.OfNative.Schema, "token"), (S.OfIndexed.Schema, "item"))])
 """Whether a schema named after the alias `al` has been read: a union with branches, a native with a token, or a list
 with an item."""
@@ -1023,7 +1117,7 @@ def missing(session: T.Session) -> list[Any]:
     """The object schemas, unions, intersections, relations, named natives and named lists of a generation's store that no
     class or alias renders, each kind in name order: those no transform renders (see their befores), whose names a field
     may still name (completeness, which mbse-patterns plans in general)."""
-    classes = {_defined(statement) for statement in _module(session.store).body}
+    classes = set(_definitions(_module(session.store)))
     return [schema for kind in ("Schemas.Object", "Schemas.Union", "Schemas.Intersection", "Schemas.Relation",
                                 "Schemas.Native", "Schemas.Indexed")
             for schema in session.store.extent(kind) if schema.name not in classes]
@@ -1031,8 +1125,14 @@ def missing(session: T.Session) -> list[Any]:
 
 def problems(session: T.Session) -> list[str]:
     """What makes a session's module invalid Python, by path (mbse-programs' validation): such as a name Python cannot
-    spell, which `Dataclass` writes as the schema has it."""
-    return Py.LANGUAGE.validate(_module(session.store))
+    spell, which `Dataclass` writes as the schema has it; and, by qualified name, a class nested in a dataclass under
+    the name of one of its fields (`Codegen.Output` where `Codegen` has a field `Output`), which would replace it."""
+    module = _module(session.store)
+    clashes = [f"{name}.{_defined(nested)}: both a field and a class or alias nested in {name}"
+               for name, defined in _definitions(module).items() if _is_dataclass(defined)
+               for nested in defined.body if _defined(nested) is not None
+               and _defined(nested) in {_spelling(item.target) for item in defined.body if isinstance(item, Py.AnnAssign)}]
+    return Py.LANGUAGE.validate(module) + clashes
 
 
 def text(session: T.Session) -> str:
