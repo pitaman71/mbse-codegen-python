@@ -78,12 +78,15 @@ check(contact.ref && [...contact.properties.keys()].join() === "name,home", "rea
 1. **One step per decision.** `Dataclass` has one parameter, `frozen`; a policy (`T.Policy(T.Clause("Dataclass",
    {"frozen": False}))`, `Types.PLAIN`) ranks the candidates, and `session.take(candidate)` is the caller deciding.
    `session.steps` is the trace, and `session.trace(...)` writes it as data.
-2. **What renders.** A named object schema without parameters or adjacencies, whose properties are basic natives, named
+2. **What renders.** A named object schema without parameters, whose properties are basic natives, named
    object schemas, or lists of them (`list[T]`, `dict[K, V]` keyed by a basic native, nested up to `Types.DEPTH`),
    without extents. Names are written as the schemas have them (a keyword property becomes `from_`): one Python cannot
    spell is in `Types.problems(session)`, and `Types.text(session)` raises `ValueError` while any remain. A reference
    object schema is `@dataclass(eq=False)`; a description is the class's docstring. Every field is optional: `name: T | None
-   = None`. Classes are in name order. `Types.missing(session)` lists the object schemas left without a class.
+   = None`. Classes are in name order. A relation of two links is a container field from its first link: `set[E]`,
+   `list[E]` (an `index: int`) or `dict[K, E]` (another native key), `E` the reference object classes at its second
+   link, with `field(default=None, metadata={...})` keeping what is not as the field says (relation name, links, key,
+   backs, uniques). `Types.missing(session)` lists the object schemas left without a class.
 3. **What reads back.** A `@dataclass` class (`@dataclass(...)` too) whose annotations are written as `Dataclass`
    writes them, `| None` or not; anything else raises `ValueError` naming the field. Reading registers the schemas in
    the store given, and fills a schema a field names when its class is read.
