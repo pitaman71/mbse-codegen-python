@@ -36,32 +36,19 @@ export const KEYWORDS = ["False", "None", "True", "and", "as", "assert", "async"
   "nonlocal", "not", "or", "pass", "raise", "return", "try", "while", "with", "yield"];
 /** How deeply lists nest in a field's type (`list[list[int]]` is 2). */
 export const DEPTH = 4;
-const IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 export const Generated = new S.OfRelation.Builder().name("Codegen.Generated").links("output", "module").create();
-const texts = (name: string) => (p: any) => p.name(name).of((t: any) => t.as_indexed((i: any) => i.of((x: any) => x.as_native(String))));
-const OutputSchema = new S.OfObject.Builder().name(OUTPUT).ref().singleton(OUTPUT).properties(texts("identifiers"),
-  texts("keywords")).relations((r) => r.name("modules").of(Generated).me("output")).create();
-
-function spellable(name: string | null): boolean {
-  return name !== null && IDENTIFIER.test(name) && !KEYWORDS.includes(name);
-}
+const OutputSchema = new S.OfObject.Builder().name(OUTPUT).ref().singleton(OUTPUT).relations(
+  (r) => r.name("modules").of(Generated).me("output")).create();
 
 let outputs = 0;
 
-/** The output of a session: the module written or read, and what Python can spell: `identifiers`, the names of the
- * schemas and their properties that are Python identifiers and not keywords, and `keywords`. */
+/** The output of a session: the module written or read. */
 export class Output {
   static Schema = OutputSchema;
   readonly #identity = `output ${++outputs}`;
 
-  constructor(public module: Py.Module | null = null, public schemas: Reflection.OfStore | null = null) {}
-
-  get identifiers(): string[] {
-    const names = this.schemas === null ? [] : this.schemas.schemas.flatMap((schema: any) =>
-      [schema.name, ...(schema.properties?.keys() ?? [])]);
-    return [...new Set(names.filter((name) => spellable(name)))].sort();
-  }
+  constructor(public module: Py.Module | null = null) {}
 
   identity(): string {
     return this.#identity;
@@ -81,8 +68,7 @@ export class Output {
 }
 
 const BINDING = new Bindings.Binding(OutputSchema,
-  (output: Output) => new Bindings.State(new Map<string, unknown>([["identifiers", output.identifiers], ["keywords", KEYWORDS]]),
-    new Map([["modules",
+  (output: Output) => new Bindings.State(new Map(), new Map([["modules",
     (output.module === null ? [] : [output.module]).map((m) => new Bindings.Entry(new Map([["module", m]])))]])),
   (state: Bindings.State) => new Output(...(state.entries.get("modules") ?? []).map((e) => e.links.get("module") as Py.Module)));
 
@@ -91,10 +77,8 @@ const BINDING = new Bindings.Binding(OutputSchema,
 export function store(schemas: Stores.Store, module: Py.Module): Stores.Combined {
   const outputs = new Bindings.OfStore([[OutputSchema, (instance?: Output) => new Bindings.Builder(BINDING, instance)]],
     [Generated]);
-  const reflected = Reflection.of(schemas);
-  const output = outputs.singleton(OUTPUT) as unknown as Output;
-  [output.module, output.schemas] = [module, reflected];
-  return new Stores.Combined(reflected, Py.LANGUAGE.Builders as never, outputs);
+  (outputs.singleton(OUTPUT) as unknown as Output).module = module;
+  return new Stores.Combined(Reflection.of(schemas), Py.LANGUAGE.Builders as never, outputs);
 }
 
 function moduleOf(store: Stores.Combined): Py.Module {
@@ -107,8 +91,8 @@ function schemasOf(store: Stores.Combined): Stores.Store {
 
 // --- Schemas to classes ---
 
-const [s, c, n, k, t, p, o, x] = [E.variable("s"), E.variable("c"), E.variable("n"), E.variable("k"), E.variable("t"),
-  E.variable("p"), E.variable("o"), E.variable("x")];
+const [s, c, n, k, t, p, x] = [E.variable("s"), E.variable("c"), E.variable("n"), E.variable("k"), E.variable("t"),
+  E.variable("p"), E.variable("x")];
 
 function basic(type: E.Writer): E.Writer {
   return type.get("native").get("format").eq("basic");
@@ -134,11 +118,8 @@ function over(symbols: Record<string, S.OfObject.Data>, constraint: unknown) {
   return new P.OfPredicate.Builder().symbols(symbols).requires(constraint as never).create();
 }
 
-const SPELLED = P.Exists((q) => q.symbols({ o: OutputSchema }).requires(
-  s.get("name").in_(o.get("identifiers")).and_(s.has("properties").not_().or_(s.get("properties").all(
-    "p", p.get("name").in_(o.get("identifiers")).or_(p.get("name").in_(o.get("keywords"))))))));
-const RENDERABLE = E.operation("and", s.has("name").and_(s.has("parameters").not_()).and_(s.has("adjacencies").not_()).and_(
-  s.has("properties").not_().or_(s.get("properties").all("p", rendered(p.get("type"))))), SPELLED);
+const RENDERABLE = s.has("name").and_(s.has("parameters").not_()).and_(s.has("adjacencies").not_()).and_(
+  s.has("properties").not_().or_(s.get("properties").all("p", rendered(p.get("type")))));
 const HAS_CLASS = P.Exists((q) => q.symbols({ c: Py.ClassDef.Schema }).requires(
   P.Contains(c.children, (e) => e.property.eq("name").and_(e.child.spelling.eq(s.name)))));
 
@@ -332,7 +313,15 @@ export function missing(session: T.Session): any[] {
   return [...session.store.extent("Schemas.Object")].filter((schema: any) => !classes.has(schema.name));
 }
 
-/** The source of a session's module, as Python 3.12 prints it. */
+/** What makes a session's module invalid Python, by path (mbse-programs' validation): such as a name Python cannot
+ * spell, which `Dataclass` writes as the schema has it. */
+export function problems(session: T.Session): string[] {
+  return Py.LANGUAGE.validate(moduleOf(session.store as Stores.Combined));
+}
+
+/** The source of a session's module, as Python 3.12 prints it; `ValueError` listing its `problems` if it has any. */
 export function text(session: T.Session): string {
+  const found = problems(session);
+  if (found.length > 0) throw new ValueError(`the module is not valid Python: ${found.join("; ")}`);
   return Python312.print(moduleOf(session.store as Stores.Combined));
 }

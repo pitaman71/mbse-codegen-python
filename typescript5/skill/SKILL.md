@@ -80,8 +80,9 @@ check(contact.ref && [...contact.properties.keys()].join() === "name,home", "rea
    `session.steps` is the trace, and `session.trace(...)` writes it as data.
 2. **What renders.** A named object schema without parameters or adjacencies, whose properties are basic natives, named
    object schemas, or lists of them (`list[T]`, `dict[K, V]` keyed by a basic native, nested up to `Types.DEPTH`),
-   without extents, and whose names are Python identifiers (a keyword property becomes `from_`). A reference object
-   schema is `@dataclass(eq=False)`; a description is the class's docstring. Every field is optional: `name: T | None
+   without extents. Names are written as the schemas have them (a keyword property becomes `from_`): one Python cannot
+   spell is in `Types.problems(session)`, and `Types.text(session)` raises `ValueError` while any remain. A reference
+   object schema is `@dataclass(eq=False)`; a description is the class's docstring. Every field is optional: `name: T | None
    = None`. Classes are in name order. `Types.missing(session)` lists the object schemas left without a class.
 3. **What reads back.** A `@dataclass` class (`@dataclass(...)` too) whose annotations are written as `Dataclass`
    writes them, `| None` or not; anything else raises `ValueError` naming the field. Reading registers the schemas in

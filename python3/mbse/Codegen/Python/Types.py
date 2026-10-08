@@ -33,7 +33,7 @@ from mbse.Programs.Python import Python312, Syntax as Py
 from mbse.Schemas.Framework import Bindings, Proxies, Reflection, Schemas as S, Stores
 
 __all__ = ["OUTPUT", "NATIVES", "KEYWORDS", "DEPTH", "Output", "Generated", "store", "Dataclass", "Schema", "TO_PYTHON",
-           "FROM_PYTHON", "PLAIN", "missing",
+           "FROM_PYTHON", "PLAIN", "missing", "problems",
            "generate", "read", "text"]
 
 OUTPUT = "Codegen.Output"
@@ -45,33 +45,19 @@ KEYWORDS = ("False", "None", "True", "and", "as", "assert", "async", "await", "b
 """Python's keywords: a field so named is written with a trailing underscore (`from_`), and read back without it."""
 DEPTH = 4
 """How deeply lists nest in a field's type (`list[list[int]]` is 2)."""
-_IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
 Generated = S.OfRelation.Builder().name("Codegen.Generated").links("output", "module").create()
-_OutputSchema = S.OfObject.Builder().name(OUTPUT).ref().singleton(OUTPUT).properties(
-    lambda p: p.name("identifiers").of(lambda t: t.as_indexed(lambda i: i.of(lambda x: x.as_native(str)))),
-    lambda p: p.name("keywords").of(lambda t: t.as_indexed(lambda i: i.of(lambda x: x.as_native(str))))).relations(
+_OutputSchema = S.OfObject.Builder().name(OUTPUT).ref().singleton(OUTPUT).relations(
     lambda r: r.name("modules").of(Generated).me("output")).create()
 
 
-def _spellable(name: str | None) -> bool:
-    return name is not None and _IDENTIFIER.fullmatch(name) is not None and name not in KEYWORDS
-
-
 class Output:
-    """The output of a session: the module written or read, and what Python can spell: `identifiers`, the names of the
-    schemas and their properties that are Python identifiers and not keywords, and `keywords`."""
+    """The output of a session: the module written or read."""
 
     Schema = _OutputSchema
 
-    def __init__(self, module: Py.Module | None = None, schemas: Stores.Store | None = None):
-        self.module, self.schemas = module, schemas
-
-    @property
-    def identifiers(self) -> list[str]:
-        names = [] if self.schemas is None else [name for schema in self.schemas.schemas for name in (
-            schema.name, *getattr(schema, "properties", {}))]
-        return sorted({name for name in names if _spellable(name)})
+    def __init__(self, module: Py.Module | None = None):
+        self.module = module
 
     def identity(self) -> int:
         return id(self)
@@ -88,8 +74,7 @@ class Output:
 
 _BINDING = Bindings.Binding(
     _OutputSchema, lambda output: Bindings.State(
-        {"identifiers": output.identifiers, "keywords": list(KEYWORDS)},
-        {"modules": [Bindings.Entry({"module": m}) for m in ([] if output.module is None else [output.module])]}),
+        {}, {"modules": [Bindings.Entry({"module": m}) for m in ([] if output.module is None else [output.module])]}),
     lambda state: Output(*[e.links["module"] for e in state.entries.get("modules", [])]))
 
 
@@ -97,10 +82,8 @@ def store(schemas: Stores.Store, module: Py.Module) -> Stores.Combined:
     """The store a session runs over: the schemas `schemas` registers and those they refer to, Python's syntax trees,
     and the output, which holds `module`."""
     outputs = Bindings.OfStore([(_OutputSchema, lambda instance=None: Bindings.Builder(_BINDING, instance))], [Generated])
-    reflected = Reflection.of(schemas)
-    output = outputs.singleton(OUTPUT)
-    output.module, output.schemas = module, reflected
-    return Stores.Combined(reflected, Py.LANGUAGE.Builders, outputs)
+    outputs.singleton(OUTPUT).module = module
+    return Stores.Combined(Reflection.of(schemas), Py.LANGUAGE.Builders, outputs)
 
 
 def _module(store: Stores.Combined) -> Py.Module:
@@ -113,7 +96,7 @@ def _schemas(store: Stores.Combined) -> Stores.Store:
 
 # --- Schemas to classes ---
 
-s, c, n, k, t, p, o, x = (E.variable(name) for name in ("s", "c", "n", "k", "t", "p", "o", "x"))
+s, c, n, k, t, p, x = (E.variable(name) for name in ("s", "c", "n", "k", "t", "p", "x"))
 
 
 def _basic(type_: E.Writer) -> E.Writer:
@@ -142,11 +125,8 @@ def _over(symbols: dict[str, Any], constraint: Any) -> P.OfPredicate.Data:
     return P.OfPredicate.Builder().symbols(symbols).requires(constraint).create()
 
 
-_SPELLED = P.Exists(lambda q: q.symbols({"o": _OutputSchema}).requires(
-    s.get("name").in_(o.get("identifiers")).and_(s.has("properties").not_().or_(s.get("properties").all(
-        "p", p.get("name").in_(o.get("identifiers")).or_(p.get("name").in_(o.get("keywords"))))))))
-_RENDERABLE = E.operation("and", s.has("name").and_(s.has("parameters").not_()).and_(s.has("adjacencies").not_()).and_(
-    s.has("properties").not_().or_(s.get("properties").all("p", _rendered(p.get("type"))))), _SPELLED)
+_RENDERABLE = s.has("name").and_(s.has("parameters").not_()).and_(s.has("adjacencies").not_()).and_(
+    s.has("properties").not_().or_(s.get("properties").all("p", _rendered(p.get("type")))))
 _HAS_CLASS = P.Exists(lambda q: q.symbols({"c": Py.ClassDef.Schema}).requires(
     P.Contains(c.children, lambda e: e.property == "name" and e.child.spelling == s.name)))
 
@@ -347,6 +327,15 @@ def missing(session: T.Session) -> list[Any]:
     return [schema for schema in session.store.extent("Schemas.Object") if schema.name not in classes]
 
 
+def problems(session: T.Session) -> list[str]:
+    """What makes a session's module invalid Python, by path (mbse-programs' validation): such as a name Python cannot
+    spell, which `Dataclass` writes as the schema has it."""
+    return Py.LANGUAGE.validate(_module(session.store))
+
+
 def text(session: T.Session) -> str:
-    """The source of a session's module, as Python 3.12 prints it."""
+    """The source of a session's module, as Python 3.12 prints it; `ValueError` listing its `problems` if it has any."""
+    found = problems(session)
+    if found:
+        raise ValueError(f"the module is not valid Python: {'; '.join(found)}")
     return Python312.print(_module(session.store))

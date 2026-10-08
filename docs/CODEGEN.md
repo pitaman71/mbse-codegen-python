@@ -35,7 +35,7 @@ requires.
 
 | Transform | Symbols | Before | After | Parameters |
 |---|---|---|---|---|
-| `Dataclass` | `s`: `Schemas.OfObject.Schema` | `s` is named, declares no parameters and no adjacencies, Python can spell its names, and every property's type renders | the module has a class named after `s` | `frozen`: `bool` |
+| `Dataclass` | `s`: `Schemas.OfObject.Schema` | `s` is named, declares no parameters and no adjacencies, and every property's type renders | the module has a class named after `s` | `frozen`: `bool` |
 | `Schema` | `c`: `Programs.Python.ClassDef` | `c` is decorated `@dataclass` or `@dataclass(...)` | a schema named after `c` has as many properties as `c` has annotated fields | none |
 
 - **A class is one step**, with all its fields: its one decision is `frozen`, and the fields follow from the schema.
@@ -47,11 +47,11 @@ requires.
   any of these, nested four deep at most (`DEPTH`). A list with an extent has no Python form yet, and a named schema of
   another kind (a named native, union, intersection or application) no class: a schema with such a property has no
   candidate, rather than a field that names nothing.
-- **Names are spelled as Python spells them, or refused.** A schema's name and its properties' names must be Python
-  identifiers (ASCII letters, digits and underscores, not starting with a digit); a schema's name not a keyword. A
-  property named by a keyword is a field with a trailing underscore (`from_`), read back without it. The output
-  singleton holds the names Python can spell (`identifiers`) and Python's `keywords`, as values a predicate reads, since
-  Basic has no string functions; a schema whose names Python cannot spell has no candidate, rather than invalid source.
+- **Names are written as the schemas have them**, so that a step can still configure them; a name Python cannot spell
+  (not an identifier, or a keyword) is a problem of the module, which mbse-programs' validation reports by path
+  (`Types.problems(session)`), and taking the source (`Types.text(session)`) with any left is a `ValueError` listing
+  them all. A property named by a keyword is a field with a trailing underscore (`from_`), read back without it: a
+  spelling, not a loss.
 - **Completeness is reported**: `Types.missing(session)` lists the object schemas no class renders, in name order, so
   a field naming one of them (a schema renders by naming any object schema) is seen, not silently left undefined.
 - **A field is optional**, as every property is (mbse-schemas: nothing is mandatory but by a constraint):
@@ -88,8 +88,9 @@ requires.
   more transform. Natives of other formats (`ccpp`) and widths (bits, bytes) have no Python form yet.
 - **Extents.** A bounded list (`.extent(0, 9)`) could be `Annotated[list[T], ...]` with a marker, or a check in
   `__post_init__` with the constraints (`Codegen/Patterns`).
-- **Names Python cannot spell.** Mapping them (the older adapter keeps a dotted name's last part) loses the name on
-  the way back; renaming the schema is the person's to decide. Should a transform offer a name as a parameter?
+- **Configuring names.** A name Python cannot spell is an error when the source is taken; a transform that offers a
+  Python name as a parameter (the older adapter keeps a dotted name's last part) would let a person or a policy fix it
+  within the session, recorded in the trace.
 - **Property descriptions** have no place in a dataclass field yet: a comment, or `Annotated[..., "..."]`.
 
 ## Resolved
@@ -97,8 +98,11 @@ requires.
 - Codegen matches schemas through mbse-schemas' `Reflection.of(store)` (0.8), and compares what they hold with
   mbse-expressions' deep equality (0.5).
 - One transform per class, not per field: a step is a decision, and a field has none yet.
-- No silent loss (0.3): a property type, an extent or a name `Dataclass` cannot render faithfully makes its schema have
-  no candidate, and `missing` reports it. Keyed lists and nested lists render, as mbse-schemas' older Python adapter
+- No silent loss (0.3): a property type or an extent `Dataclass` cannot render faithfully makes its schema have no
+  candidate, and `missing` reports it.
+- Names Python cannot spell are written as they are, flagged by mbse-programs' validation (which already holds any
+  spelling and flags those), and an error only when the source is taken (0.4), so that a step may still configure
+  them. Keyed lists and nested lists render, as mbse-schemas' older Python adapter
   (`Adapters/Dataclasses.py`) maps them.
 - Decisions are keyed by schema names (0.2), so they survive any change but a rename; a renamed schema's decision is
   an orphan, for the person to confirm again (mbse-patterns' open question on renames).
