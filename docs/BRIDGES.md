@@ -44,7 +44,7 @@ not report it, and reading back did not restore it. 0.9.1 writes and reads each,
 |---|---|---|---|
 | Basic native (`bool`, `int`, `float`, `str`, `bytes`) | Python's own type | none | built |
 | `python3` token of a basic native | the same type, the token in metadata: `Annotated[int, {"native": ["python3", "int"]}]`, so that it reads back as `python3` | none | built (0.12). Another `python3` token (`decimal.Decimal`) has no host type in mbse-schemas' proxies, so no class |
-| Native of another format (`ccpp` `int32_t`, `typescript5` `number`) | a basic Python type, the token kept in metadata: `Annotated[int, {"native": ["ccpp", "int32_t"]}]` | `host`: which basic type. A policy may hold a table of them | feasible |
+| Native of another format (`ccpp` `int32_t`, `typescript5` `number`) | none: not bridged (CODEGEN.md, Resolved, Natives codegen supports). Such a native has no class, and `missing` reports it | none | not bridged |
 | Width in bits or bytes, an int | metadata: `Annotated[int, {"bits": 32}]` | none | built (0.11) |
 | A native's own description | metadata: `Annotated[int, {"description": "a count"}]` | none | built (0.11) |
 | Width as a term | the term, rendered by `Codegen/Expressions` | | waits on Codegen/Expressions |
@@ -134,8 +134,8 @@ not report it, and reading back did not restore it. 0.9.1 writes and reads each,
    and wrote, by role, as relations whose entries hold their paths.
 4. The deterministic rows without parameters: named natives and lists as aliases (0.10, done), widths, natives' own
    descriptions and extents with int bounds (0.11, done), `python3` tokens (0.12, done).
-5. The rows with a parameter: other formats' natives (`host`), inline schemas (`name`), dotted names (`layout`); keys
-   of schemas need none (0.13, done).
+5. The rows with a parameter: inline schemas (`name`), dotted names (`layout`); keys of schemas need none (0.13,
+   done), and other formats' natives are not bridged (no `host`).
 6. Bindings (`bound`).
 7. Value parameters and applications, once their `form` options are chosen.
 8. Rows that wait on other repositories: terms (Codegen/Expressions), type parameters and anonymous adjacencies

@@ -151,14 +151,18 @@ requires.
 - **Entries as a sorted set.** Any iterable holds entries; a set sorted by a comparator would serve retrieval.
 - **The older adapter.** mbse-schemas' `Adapters/Dataclasses.py` maps containers of dataclasses to relations, as
   0.5 did and 0.6 no longer does; its classes do not read as proxies. Retire it, or bring it to entry classes.
-- **Other formats.** Natives of other formats (`ccpp`) have no Python form yet: which Python type stands for one is a
-  parameter (`host`), the token kept in `Annotated` metadata.
 - **Several elements in one role.** A class's step reads the native and list aliases its fields name, which a rewrite
   cannot yet return as written (one element per role): mbse-patterns could let a role hold several.
 - **Checking extents and widths.** `Annotated` metadata says them; checking them (`__post_init__`, or a validator
   beside the classes) is Codegen/Patterns' work, with the constraints.
 
 ## Resolved
+
+- **Natives codegen supports**, as the user decided: "only python native and basic can be supported for codegen." A
+  native of another format (`ccpp` `int32_t`, `typescript5` `number`) is not bridged: no Python type is chosen to
+  stand for it (there is no `host` parameter), it has no class, and `missing` reports it. Of `python3`'s own tokens,
+  those of a basic type's name are built (0.12); the others (`decimal.Decimal`) wait on mbse-schemas' proxies having
+  a host type for them.
 
 - **Keys a `dict` cannot hold faithfully**, as the user decided: "dict keyed by a wrapper", and of where the wrapper
   lives, "(b)": in mbse-schemas, as a run-time class generated code imports, so that one implementation compares keys
