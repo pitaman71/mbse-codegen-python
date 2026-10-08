@@ -113,8 +113,8 @@ not report it, and reading back did not restore it. 0.9.1 writes and reads each,
 | Construct | Python bridge | Ambiguity, as a parameter | Status |
 |---|---|---|---|
 | Schemas of one store | one module, classes and aliases in name order | none | built |
-| Dotted names (`Codegen.Output`) | a package per prefix (`Codegen/__init__.py` holding `Output`), or one module with names mangled | `layout`. Today a dotted name is a problem when the source is taken | feasible |
-| A name Python cannot spell | written as it is, then an error | `name`: a rename step, recorded in the trace | the error is built; the rename is feasible |
+| Dotted names (`Codegen.Output`) | a package per prefix (`Codegen/__init__.py` holding `Output`), which spells the name exactly | `layout`: one package per prefix, or the module given, whose dotted names stay a problem. Mangling them into one name would rename, which the policy above rules out | feasible |
+| A name Python cannot spell | written as it is, flagged by mbse-programs' validation, an error when the source is taken | none: the policy, not a bridge. A name is the schema's to configure; codegen never renames | built (0.4) |
 | Instances that serialize and validate as the store's objects | the module binds its classes to the schemas (mbse-schemas' `Bindings`), so `to_plain` and `from_plain` give the wire form | `bound`: whether generated code depends on mbse-schemas at run time | feasible |
 
 ## Not bridged on purpose
@@ -135,7 +135,7 @@ not report it, and reading back did not restore it. 0.9.1 writes and reads each,
 4. The deterministic rows without parameters: named natives and lists as aliases (0.10, done), widths, natives' own
    descriptions and extents with int bounds (0.11, done), `python3` tokens (0.12, done).
 5. The rows with a parameter: other formats' natives (`host`), inline schemas (`name`), keys of schemas (`frozen`
-   coupling), the adjacency `container`, dotted names (`layout`), the rename step.
+   coupling), the adjacency `container`, dotted names (`layout`).
 6. Bindings (`bound`).
 7. Value parameters and applications, once their `form` options are chosen.
 8. Rows that wait on other repositories: terms (Codegen/Expressions), type parameters and anonymous adjacencies

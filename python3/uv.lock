@@ -460,7 +460,7 @@ wheels = [
 
 [[package]]
 name = "mbse-codegen-python"
-version = "0.12.0"
+version = "0.12.1"
 source = { editable = "." }
 dependencies = [
     { name = "mbse-expressions" },
@@ -550,7 +550,7 @@ dev = [
 
 [[package]]
 name = "mbse-programs"
-version = "0.3.26"
+version = "0.3.27"
 source = { editable = "../../mbse-programs/python3" }
 dependencies = [
     { name = "mbse-expressions" },

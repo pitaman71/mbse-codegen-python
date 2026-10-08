@@ -147,9 +147,6 @@ requires.
   cannot yet return as written (one element per role): mbse-patterns could let a role hold several.
 - **Checking extents and widths.** `Annotated` metadata says them; checking them (`__post_init__`, or a validator
   beside the classes) is Codegen/Patterns' work, with the constraints.
-- **Configuring names.** A name Python cannot spell is an error when the source is taken; a transform that offers a
-  Python name as a parameter (the older adapter keeps a dotted name's last part) would let a person or a policy fix it
-  within the session, recorded in the trace.
 
 ## Resolved
 
@@ -175,7 +172,7 @@ requires.
   configuration, not a decision of codegen, since code written against one does not read the other.
 - Names Python cannot spell are written as they are, flagged by mbse-programs' validation (which already holds any
   spelling and flags those), and an error only when the source is taken (0.4), so that a step may still configure
-  them. Keyed lists and nested lists render, as mbse-schemas' older Python adapter
+  them. Codegen never renames: a name is the schema's to configure, and one Python cannot spell is fixed there. Keyed lists and nested lists render, as mbse-schemas' older Python adapter
   (`Adapters/Dataclasses.py`) maps them.
 - Decisions are keyed by schema names (0.2), so they survive any change but a rename; a renamed schema's decision is
   an orphan, for the person to confirm again (mbse-patterns' open question on renames).
