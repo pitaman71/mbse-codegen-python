@@ -32,6 +32,10 @@ singleton `Codegen.Output` holds the module written or read. Each step is one de
   `type Names = list[Word]`), as a proxy reads its value, and a field names it.
 - `AliasSchema` reads a type alias of the module back: a flat union of `A | B | ...`, a named native, or a named list.
 
+A type with no Python form is dropped by a step of its own, one transform per reason (`DROPS`: `DropInline`,
+`DropFormat`, `DropUndeclared`), which the output records and `dropped(session)` reports; where it is held it is
+`Any`. A type with parameters or terms is not dropped but unbuilt (`Unbuilt`): a schema holding one has no class
+until the parametric bridge (TypeVars), and `missing(session)` reports it.
 Each step links what it wrote, by role: a `class`, an `alias`, or, reading back, a `schema` (mbse-patterns' `Wrote`).
 `generate(schemas, policy, earlier)` and `read(module, schemas)` run each to the end. `frozen` is the one thing a schema
 does not hold: reading code back loses it, and the trace of the generation keeps it. A generation given the steps of an
@@ -53,7 +57,7 @@ from mbse.Programs.Framework import Syntax as Trees
 from mbse.Programs.Python import Python312, Syntax as Py
 from mbse.Schemas.Framework import Bindings, Proxies, Reflection, Schemas as S, Stores
 
-__all__ = ["OUTPUT", "NATIVES", "KEYWORDS", "Rendered", "Output", "Generated", "store", "Dataclass", "Entry", "Union",
+__all__ = ["OUTPUT", "NATIVES", "KEYWORDS", "DROPS", "dropped", "Output", "Generated", "store", "Dataclass", "Entry", "Union",
            "Intersection", "Alias", "NativeAlias", "ListAlias", "Schema", "AliasSchema", "TO_PYTHON",
            "FROM_PYTHON", "PLAIN", "missing", "problems",
            "generate", "read", "text"]
@@ -72,8 +76,13 @@ Defined = S.OfRelation.Builder().name("Codegen.Defined").links("output", "node")
 """What the module defines by qualified name (`Codegen.Output`): each dataclass and type alias, nested ones included;
 derived from the module whenever the output is read, so it is never out of date. A name is unique, so a written trace
 names a class by it (`Codegen.Output/defined[name="Contact"]`, mbse-schemas' `Paths`), wherever the class is."""
+Dropped = S.OfRelation.Builder().name("Codegen.Dropped").links("output", "schema").properties(
+    lambda p: p.name("reason").of(lambda t: t.as_native(str)), lambda p: p.name("where").of(lambda t: t.as_native(str))).create()
+"""What the drop steps dropped: a schema, the transform that dropped it (`DROPS`), and where in it (`""` for the schema
+itself, else a property, branch or part, `name[item]` within a list)."""
 _OutputSchema = S.OfObject.Builder().name(OUTPUT).ref().singleton(OUTPUT).relations(
-    lambda r: r.name("modules").of(Generated).me("output"), lambda r: r.name("defined").of(Defined).me("output")).create()
+    lambda r: r.name("modules").of(Generated).me("output"), lambda r: r.name("defined").of(Defined).me("output"),
+    lambda r: r.name("dropped").of(Dropped).me("output")).create()
 
 
 class Output:
@@ -81,8 +90,9 @@ class Output:
 
     Schema = _OutputSchema
 
-    def __init__(self, module: Py.Module | None = None):
+    def __init__(self, module: Py.Module | None = None, dropped: Iterable[tuple[Any, str, str]] = ()):
         self.module = module
+        self.dropped = list(dropped)
 
     def identity(self) -> int:
         return id(self)
@@ -101,15 +111,18 @@ _BINDING = Bindings.Binding(
     _OutputSchema, lambda output: Bindings.State({}, {
         "modules": [Bindings.Entry({"module": m}) for m in ([] if output.module is None else [output.module])],
         "defined": [Bindings.Entry({"node": node}, {"name": name})
-                    for name, node in ({} if output.module is None else _definitions(output.module)).items()]}),
-    lambda state: Output(*[e.links["module"] for e in state.entries.get("modules", [])]))
+                    for name, node in ({} if output.module is None else _definitions(output.module)).items()],
+        "dropped": [Bindings.Entry({"schema": schema}, {"reason": reason, "where": where})
+                    for schema, reason, where in output.dropped]}),
+    lambda state: Output(next((e.links["module"] for e in state.entries.get("modules", [])), None), [
+        (e.links["schema"], e.properties["reason"], e.properties["where"]) for e in state.entries.get("dropped", [])]))
 
 
 def store(schemas: Stores.Store, module: Py.Module) -> Stores.Combined:
     """The store a session runs over: the schemas `schemas` registers and those they refer to, Python's syntax trees,
     and the output, which holds `module`."""
     outputs = Bindings.OfStore([(_OutputSchema, lambda instance=None: Bindings.Builder(_BINDING, instance))],
-                               [Generated, Defined])
+                               [Generated, Defined, Dropped])
     outputs.singleton(OUTPUT).module = module
     return Stores.Combined(Reflection.of(schemas), Py.LANGUAGE.Builders, outputs)
 
@@ -134,42 +147,188 @@ def _pythonic(native: E.Writer) -> E.Writer:
         lambda either, other: either.or_(other), [native.get("token").eq(named) for named in NATIVES])))
 
 
-def _basic(type_: E.Writer) -> E.Writer:
-    """A native Python's types hold (see `_pythonic`), its width, description and a `python3` token in `Annotated`
-    metadata: one without parameters or a width that is a term, which wait on parameters' Python form."""
-    native = type_.get("native")
-    return _pythonic(native).and_(native.has("terms").not_()).and_(native.has("parameters").not_())
-
-
 def _bounded(indexed: E.Writer) -> E.Writer:
     """Whether a list's extent, if it has one, is of int bounds, which `Annotated` metadata holds."""
     return indexed.has("extent").not_().or_(indexed.get("extent").has("terms").not_())
 
 
-def _simple(type_: E.Writer) -> E.Writer:
-    """A basic native, or a named schema of a kind that a class or an alias renders: an object schema, a union, an
-    intersection, a native or a list."""
-    named = [P.Exists(lambda q, meta=meta: q.symbols({"x": meta}).requires(x.get("name").eq(type_.get("named").get("name"))))
-             for meta in (S.OfObject.Schema, S.OfUnion.Schema, S.OfIntersection.Schema, S.OfNative.Schema, S.OfIndexed.Schema)]
-    return _basic(type_).or_(E.operation("and", type_.has("named"), functools.reduce(
-        lambda either, other: E.operation("or", either, other), named)))
-
-
-Rendered = P.OfPredicate.Builder().name("Codegen.Rendered").parameters(lambda q: q.name("t")).create()
-"""Whether `Dataclass` renders a type `t`: a simple one, or a list of one it renders, its extent if any of int bounds,
-positional or keyed by a type it renders, nested to any depth. It applies itself to the list's item."""
-P.OfPredicate.Builder(Rendered).requires(_simple(t).or_(t.has("indexed").and_(_bounded(t.get("indexed"))).and_(
-    t.get("indexed").has("key").not_().or_(Rendered(t.get("indexed").get("key")))).and_(
-    Rendered(t.get("indexed").get("item"))))).update()
-
-
-def _rendered(type_: E.Writer) -> Any:
-    """Whether `Dataclass` renders the type: `Rendered` applied to it."""
-    return Rendered(type_)
-
-
 def _over(symbols: dict[str, Any], constraint: Any) -> P.OfPredicate.Data:
     return P.OfPredicate.Builder().symbols(symbols).requires(constraint).create()
+
+
+# --- Drops: what has no Python form, and why ---
+
+DROPS = {
+    "DropInline": "an inline schema: a Python class needs a name, which is the schema's to give",
+    "DropFormat": "a native of another format: only Python's and basic natives are supported",
+    "DropUndeclared": "a link no object schema declares, which has no type",
+}
+"""Why a type has no Python form, by the transform that drops it (CODEGEN.md, Resolved; each an open question). A
+type dropped where it is held is `Any` there, and the schema holding it keeps its class; a named native of another
+format has no alias, and every reference to it is `Any`."""
+
+
+def _itself(schema: Any) -> list[str]:
+    """Why a named schema has no Python form at all: a native of another format; none for any other."""
+    return ["DropFormat"] if isinstance(schema, S.OfNative.Data) and schema.token.format not in (S.BASIC, S.PYTHON3) else []
+
+
+def _held(type_: Any) -> list[str]:
+    """Why a type, where it is held, has no Python form: an inline object, union, intersection or relation, or an
+    inline native of another format. A named schema is not dropped where it is held: a reference to one dropped as a
+    whole is `Any` (see `_demoted`), and its own step says why."""
+    if type_.name is not None:
+        return []
+    if isinstance(type_, (S.OfObject.Data, S.OfUnion.Data, S.OfIntersection.Data, S.OfRelation.Data)):
+        return ["DropInline"]
+    return _itself(type_)
+
+
+def _demoted(type_: Any) -> bool:
+    """Whether a type is written as `Any`: dropped where it is held, or a reference to a schema dropped as a whole."""
+    return bool(_itself(type_) if type_.name is not None else _held(type_))
+
+
+def _drops_at(type_: Any, where: str) -> list[tuple[str, str]]:
+    """The drops of a type held at `where`, by reason, and of the types an inline list it is holds."""
+    reasons = _held(type_)
+    if reasons:
+        return [(reason, where) for reason in reasons]
+    if isinstance(type_, S.OfIndexed.Data) and type_.name is None:
+        return _drops_at(type_.item, f"{where}[item]") + ([] if type_.key is None else _drops_at(type_.key, f"{where}[key]"))
+    return []
+
+
+def _drops(store: Any, schema: Any) -> list[tuple[str, str]]:
+    """What of a named schema has no Python form, by reason and place: the schema itself (`""`), or a property, an
+    adjacency, a link, a branch, a part, or a list's item or key, where the schema itself has a form."""
+    itself = _itself(schema)
+    if itself:
+        return [(reason, "") for reason in itself]
+    if isinstance(schema, S.OfIndexed.Data):
+        return _drops_at(schema.item, "item") + ([] if schema.key is None else _drops_at(schema.key, "key"))
+    if isinstance(schema, S.OfRelation.Data):
+        objects = list(store.extent("Schemas.Object"))
+        return [d for name, prop in schema.properties.items() for d in _drops_at(prop.type, name)] + [
+            ("DropUndeclared", link) for link in schema.links if not _declarers(objects, schema, link)]
+    if isinstance(schema, S.OfObject.Data):
+        return [d for name, prop in schema.properties.items() for d in _drops_at(prop.type, name)] + [
+            ("DropInline", name) for name, adjacency in schema.adjacencies.items() if adjacency.relation.name is None]
+    members = schema.branches if isinstance(schema, S.OfUnion.Data) else schema.parts
+    if isinstance(schema, S.OfIntersection.Data) and schema.flat:
+        return [d for part in members if part.type.name is None
+                for name, prop in part.type.properties.items() for d in _drops_at(prop.type, f"{part.name}.{name}")]
+    return [d for member in members for d in _drops_at(member.type, member.name)]
+
+
+def _foreign(native: E.Writer) -> E.Writer:
+    """Whether a native, as reflected, is of another format than Python's and basic."""
+    return native.get("format").eq("basic").not_().and_(native.get("format").eq("python3").not_())
+
+
+def _at(reason: str, type_: E.Writer) -> E.Writer:
+    """Whether the type `type_`, where it is held, is dropped for `reason` (as `_held`)."""
+    if reason == "DropInline":
+        return type_.has("object").or_(type_.has("union")).or_(type_.has("intersection"))
+    return type_.has("native").and_(_foreign(type_.get("native")))
+
+
+def _somewhere(reason: str) -> P.OfPredicate.Data:
+    """Whether a type `t` is dropped for `reason` where it is held, or holds one that is within an inline list, at any
+    depth (as `_drops_at`). It applies itself to the list's item and key."""
+    found = P.OfPredicate.Builder().name(f"Codegen.{reason}").parameters(lambda q: q.name("t")).create()
+    indexed = t.get("indexed")
+    P.OfPredicate.Builder(found).requires(_at(reason, t).or_(t.has("indexed").and_(
+        E.operation("or", found(indexed.get("item")), indexed.has("key").and_(found(indexed.get("key"))))))).update()
+    return found
+
+
+_SOMEWHERE = {reason: _somewhere(reason) for reason in ("DropInline", "DropFormat")}
+
+
+def _held_at(reason: str, kind: str, z: E.Writer) -> Any:
+    """Whether the schema `z` of `kind` holds a type dropped for `reason` (as `_drops`); None where it never does."""
+    if reason == "DropUndeclared":
+        return z.get("links").any("l", E.operation("not", P.Exists(
+            lambda q: q.symbols({"y": S.OfObject.Schema}).requires(_declares(y, l))))) if kind == "relation" else None
+    held = _SOMEWHERE[reason]
+    each = lambda listed: z.has(listed).and_(z.get(listed).any("p", held(p.get("type"))))  # noqa: E731
+    if kind in ("object", "relation"):
+        found = each("properties")
+        inline = z.has("adjacencies").and_(z.get("adjacencies").any("a", a.get("relation").has("relation")))
+        return found.or_(inline) if kind == "object" and reason == "DropInline" else found
+    if kind == "union":
+        return each("branches")
+    if kind == "intersection":
+        flat = z.get("parts").any("p", p.get("type").has("object").and_(p.get("type").get("object").has("properties")).and_(
+            p.get("type").get("object").get("properties").any("q", held(E.variable("q").get("type")))))
+        return z.has("flat").not_().and_(each("parts")).or_(z.has("flat").and_(z.has("parts")).and_(flat))
+    if kind == "list":
+        return E.operation("or", held(z.get("item")), z.has("key").and_(held(z.get("key"))))
+    return None
+
+
+def _drop(reason: str) -> Any:
+    def rewrite(store: Stores.Combined, match: dict[str, Any], arguments: dict[str, Any]) -> None:
+        schema = next(iter(match.values()))
+        store.singleton(OUTPUT).dropped += [(schema, found, where) for found, where in _drops(store, schema) if found == reason]
+    return rewrite
+
+
+_DROP_KINDS = (("object", S.OfObject.Schema), ("relation", S.OfRelation.Schema), ("union", S.OfUnion.Schema),
+               ("intersection", S.OfIntersection.Schema), ("native", S.OfNative.Schema), ("list", S.OfIndexed.Schema))
+
+
+def _drop_transforms() -> tuple[T.Transform, ...]:
+    """A transform per reason and kind of schema it applies to, named after the reason: before, a named native of
+    another format (`DropFormat` as a whole), or a schema holding a type dropped for the reason; after, the output
+    records it (`Codegen.Dropped`)."""
+    made = []
+    for reason in DROPS:
+        for kind, meta in _DROP_KINDS:
+            symbol = "r" if kind == "relation" else "s"
+            z = E.variable(symbol)
+            whole = _foreign(z) if kind == "native" and reason == "DropFormat" else None
+            held = _held_at(reason, kind, z)
+            if whole is None and held is None:
+                continue
+            recorded = P.Exists(lambda q, z=z, reason=reason: q.symbols({"o": _OutputSchema}).requires(E.quantifier(
+                "any", "e", E.operation("entries", o, "dropped"),
+                E.variable("e").get("schema").eq(z).and_(E.variable("e").get("reason").eq(reason)))))
+            made.append(T.Transform(reason, _over({symbol: meta}, z.has("name").and_(whole if held is None else held)),
+                                    _over({symbol: meta}, recorded), rewrite=_drop(reason)))
+    return tuple(made)
+
+
+# --- Parameters and terms: not built yet ---
+
+Unbuilt = P.OfPredicate.Builder().name("Codegen.Unbuilt").parameters(lambda q: q.name("t")).create()
+"""Whether a type `t` has parameters or terms, whose Python form (TypeVars) is not built yet, there or within an inline
+list it is: an application, a native or a list declaring parameters, a width or an extent that is a term, or a
+reference to a named schema that declares parameters, has such a width or extent, or is an application. A schema
+holding one has no class or alias yet, and `missing` reports it: it is not dropped (CODEGEN.md, Resolved)."""
+
+
+def _named_unbuilt(type_: E.Writer) -> E.Writer:
+    held = [P.Exists(lambda q, meta=meta, more=more: q.symbols({"x": meta}).requires(x.get("name").eq(
+        type_.get("named").get("name"))).requires(more(x)))
+            for meta, more in ((S.OfObject.Schema, lambda z: z.has("parameters")), (S.OfUnion.Schema, lambda z: z.has("parameters")),
+                               (S.OfIntersection.Schema, lambda z: z.has("parameters")), (S.OfApply.Schema, lambda z: z.has("name")),
+                               (S.OfNative.Schema, lambda z: z.has("parameters").or_(z.has("terms"))),
+                               (S.OfIndexed.Schema, lambda z: z.has("parameters").or_(_bounded(z).not_())))]
+    return E.operation("and", type_.has("named"), functools.reduce(lambda either, other: E.operation("or", either, other), held))
+
+
+P.OfPredicate.Builder(Unbuilt).requires(t.has("apply").or_(
+    t.has("native").and_(t.get("native").has("parameters").or_(t.get("native").has("terms")))).or_(
+    t.has("indexed").and_(t.get("indexed").has("parameters").or_(_bounded(t.get("indexed")).not_()))).or_(
+    _named_unbuilt(t)).or_(t.has("indexed").and_(E.operation("or", Unbuilt(t.get("indexed").get("item")), t.get(
+        "indexed").has("key").and_(Unbuilt(t.get("indexed").get("key"))))))).update()
+
+
+def _built(listed: str, z: E.Writer) -> E.Writer:
+    """Whether none of the types `z` holds under `listed` is unbuilt (see `Unbuilt`)."""
+    return z.has(listed).not_().or_(z.get(listed).all("p", E.operation("not", Unbuilt(p.get("type")))))
 
 
 l = E.variable("l")
@@ -181,17 +340,19 @@ def _declares(schema: E.Writer, link: E.Writer) -> E.Writer:
         b.get("relation").get("named").get("name").eq(r.get("name"))).and_(b.get("me").eq(link))))
 
 
-_RELATED = E.operation("and", a.get("relation").has("named"), P.Exists(lambda q: q.symbols({"r": S.OfRelation.Schema}).requires(
-    r.get("name").eq(a.get("relation").get("named").get("name")))))
-"""Whether the adjacency `a` is to a named relation, whose entry class its field holds."""
-_RENDERABLE = s.has("name").and_(s.has("parameters").not_()).and_(
-    s.has("adjacencies").not_().or_(s.get("adjacencies").all("a", _RELATED))).and_(
-    s.has("properties").not_().or_(s.get("properties").all("p", _rendered(p.get("type")))))
-_ENTRY_RENDERABLE = E.operation("and", r.has("name").and_(r.has("parameters").not_()).and_(
-    r.has("properties").not_().or_(r.get("properties").all("p", _rendered(p.get("type"))))),
-    r.get("links").all("l", P.Exists(lambda q: q.symbols({"y": S.OfObject.Schema}).requires(_declares(y, l)))))
-"""Whether `Entry` renders the relation `r`: named, without parameters, its properties' types rendered, and each link
-declared by an object schema, which types it."""
+_PARAMETRIC_RELATION = P.Exists(lambda q: q.symbols({"r": S.OfRelation.Schema}).requires(
+    r.get("name").eq(a.get("relation").get("named").get("name"))).requires(r.has("parameters")))
+_RENDERABLE = s.has("name").and_(s.has("parameters").not_()).and_(_built("properties", s)).and_(
+    s.has("adjacencies").not_().or_(s.get("adjacencies").all("a", E.operation("not", E.operation(
+        "and", a.get("relation").has("named"), _PARAMETRIC_RELATION)))))
+"""Whether `Dataclass` renders the object schema `s`: named, without parameters, and holding no type that is unbuilt
+(see `Unbuilt`), nor an adjacency to a relation that declares parameters. A type that is dropped is `Any` (see Drops),
+so it keeps no class from being written."""
+_ENTRY_RENDERABLE = r.has("name").and_(r.has("parameters").not_()).and_(_built("properties", r)).and_(
+    r.get("links").all("l", E.operation("not", P.Exists(lambda q: q.symbols({"y": S.OfObject.Schema}).requires(
+        _declares(y, l)).requires(y.has("parameters"))))))
+"""Whether `Entry` renders the relation `r`: named, without parameters, holding no type that is unbuilt, and no link
+declared by an object schema that declares parameters."""
 o = E.variable("o")
 _HAS_CLASS = P.Exists(lambda q: q.symbols({"o": _OutputSchema}).requires(
     P.Contains(o.defined, lambda e: e.name == s.name and e.node.kind == "ClassDef")))
@@ -203,8 +364,10 @@ def _name(builder: Any, spelling: str) -> Any:
 
 
 def _annotation(type_: Any) -> Any:
-    """The annotation of a type `Dataclass` renders: a named schema by its name, a dotted one as attributes
-    (`Codegen.Output`, a nested class), or what it holds, in `Annotated` with what that annotation cannot say."""
+    """The annotation of a type: `Any` for one dropped (see Drops), a named schema by its name, a dotted one as
+    attributes (`Codegen.Output`, a nested class), or what it holds, in `Annotated` with what that cannot say."""
+    if _demoted(type_):
+        return lambda b: _name(b, "Any")
     return (lambda b: _dotted(b, type_.name)) if type_.name is not None else _annotated(_structure_annotation(type_), _facets(type_))
 
 
@@ -353,10 +516,11 @@ def _optional_field(name: str, annotation: Any, description: str | None = None) 
 
 
 def _annotations(module: Py.Module, built: Any) -> None:
-    """Imports `Annotated` and mbse-schemas' `Proxies` where `built` uses them."""
+    """Imports `Annotated`, `Any` and mbse-schemas' `Proxies` where `built` uses them."""
     used = {_spelling(node) for node in Trees.walk(built) if isinstance(node, Py.Name)}
-    if "Annotated" in used:
-        _require(module, "typing", "Annotated")
+    for name in ("Annotated", "Any"):
+        if name in used:
+            _require(module, "typing", name)
     if "Proxies" in used:
         _require(module, "mbse.Schemas.Framework", "Proxies")
 
@@ -402,7 +566,8 @@ def _render(store: Stores.Combined, match: dict[str, Any], arguments: dict[str, 
     for name, adjacency in schema.adjacencies.items():
         relation = adjacency.relation
         entries = lambda b, relation=relation: b.Subscript().value(lambda x: _name(x, "tuple")).slice(  # noqa: E731
-            lambda x: x.Tuple().add_elts(lambda y: _dotted(y, relation.name)).add_elts(lambda y: y.Constant().spelling("...")))
+            lambda x: x.Tuple().add_elts(lambda y: _dotted(y, "Any" if relation.name is None or _itself(relation) else relation.name)).add_elts(
+                lambda y: y.Constant().spelling("...")))
         metadata = {} if adjacency.description is None else {"description": adjacency.description}
         if len({a.me for a in schema.adjacencies.values() if a.relation is relation}) > 1:  # which link, where ambiguous
             metadata["me"] = adjacency.me
@@ -420,7 +585,7 @@ def _render_entry(store: Stores.Combined, match: dict[str, Any], arguments: dict
     uniques = sorted(sorted(unique) for unique in relation.uniques)
     body = _docstring(relation.description) + [_class_variable("LINKS", 1, list(relation.links))]
     body += [_class_variable("UNIQUES", 2, uniques)] if uniques else []
-    body += [_optional_field(link, _union([o.name for o in _declarers(objects, relation, link)]))
+    body += [_optional_field(link, _union([o.name for o in _declarers(objects, relation, link) if not _itself(o)] or ["Any"]))
              for link in relation.links]
     body += [_optional_field(name, _annotation(prop.type), prop.description) for name, prop in relation.properties.items()]
     built = B.ClassDef().name(relation.name).add_decorator_list(
@@ -543,20 +708,13 @@ _MEMBERS = {"union": "branches", "intersection": "parts"}
 """Where a union's and an intersection's members are, in their module form and their data."""
 
 
-def _object_rendered(type_: E.Writer) -> E.Writer:
-    """Whether a part's type is an object schema whose properties render: inline, or named."""
-    inline = type_.get("object")
-    renders = lambda o: o.has("properties").not_().or_(o.get("properties").all("q", _rendered(E.variable("q").get("type"))))  # noqa: E731
-    named = P.Exists(lambda q: q.symbols({"x": S.OfObject.Schema}).requires(
-        x.get("name").eq(type_.get("named").get("name"))).requires(renders(x)))
-    return E.operation("or", type_.has("object").and_(renders(inline)), E.operation("and", type_.has("named"), named))
-
-
 def _variants_renderable(kind: str, flat: bool) -> Any:
     members = _MEMBERS[kind]
     flatness = s.has("flat") if flat else s.has("flat").not_()
-    each = _object_rendered(p.get("type")) if kind == "intersection" and flat else _rendered(p.get("type"))
-    return s.has("name").and_(s.has("parameters").not_()).and_(flatness).and_(s.has(members)).and_(s.get(members).all("p", each))
+    built = _built(members, s)
+    if kind == "intersection" and flat:  # an inline part's properties are the class's own
+        built = built.and_(s.get(members).all("p", p.get("type").has("object").not_().or_(_built("properties", p.get("type").get("object")))))
+    return s.has("name").and_(s.has("parameters").not_()).and_(flatness).and_(s.has(members)).and_(built)
 
 
 def _convention(type_: Any) -> str:
@@ -682,7 +840,7 @@ NativeAlias = T.Transform("NativeAlias", _over({"s": S.OfNative.Schema}, _NAMED.
 """A named native Python's types hold (see `_pythonic`) as a type alias of Python's type for it (`type Word = str`), as a
 proxy reads its value."""
 ListAlias = T.Transform("ListAlias", _over({"s": S.OfIndexed.Schema}, _NAMED.and_(_bounded(s)).and_(
-    s.has("key").not_().or_(_rendered(s.get("key")))).and_(_rendered(s.get("item")))),
+    E.operation("not", Unbuilt(s.get("item")))).and_(s.has("key").not_().or_(E.operation("not", Unbuilt(s.get("key")))))),
     _over({"s": S.OfIndexed.Schema}, _HAS_ALIAS), rewrite=_render_named)
 """A named list as a type alias of `list[T]` or `dict[K, T]` (`type Names = list[str]`), as a proxy reads its value."""
 """A named intersection as a class of a field per part, as a proxy's intersection value reads it, its class variable
@@ -749,6 +907,8 @@ def _type(schemas: Stores.Store, annotation: Any, where: str, module: Py.Module)
     if isinstance(annotation, Py.Subscript) and isinstance(annotation.value, Py.Name) and _spelling(annotation.value) == "Annotated":
         held, facets = annotation.slice.elts[0], _literal(annotation.slice.elts[1])
         return _faceted(_type(schemas, held, where, module), facets).update()
+    if _head(annotation) == "Any":
+        raise ValueError(f"{where}: Any is a dropped type, which reading cannot restore")
     if isinstance(annotation, (Py.Name, Py.Attribute)) and _head(annotation) is not None:
         name = _head(annotation)
         return S.OfNative.Data({"bool": bool, "int": int, "float": float, "str": str, "bytes": bytes}[name]) if (
@@ -1019,6 +1179,8 @@ def _read_class(store: Stores.Combined, match: dict[str, Any], arguments: dict[s
             properties.append(lambda q, f=field_name, y=_type(schemas, _optional(field.annotation), where, module),
                               d=description: _described(q.name(f).of(y), d))
         else:
+            if relation_name == "Any":
+                raise ValueError(f"{where}: Any is a dropped type, which reading cannot restore")
             relation = _relation(schemas, module, relation_name, where)
             me = _me(module, name, field, relation_name, where)
             adjacencies.append(lambda q, f=field_name, rel=relation, me=me, d=description: _described(q.name(f).of(rel).me(me), d))
@@ -1087,11 +1249,14 @@ Schema = T.Transform("Schema", _over({"c": Py.ClassDef.Schema}, _DECORATED),
                      _over({"c": Py.ClassDef.Schema}, _HAS_SCHEMA), rewrite=_read_class)
 """A dataclass of the module as an object schema, or an entry class (with `LINKS`) as a relation."""
 
-TO_PYTHON = (Dataclass, Entry, Union, Intersection, Alias, NativeAlias, ListAlias)
+DROP = _drop_transforms()
+"""The drop transforms: per reason (`DROPS`), one for each kind of schema it applies to, named after the reason."""
+TO_PYTHON = (Dataclass, Entry, Union, Intersection, Alias, NativeAlias, ListAlias, *DROP)
 FROM_PYTHON = (Schema, AliasSchema)
 PLAIN = T.Policy(T.Clause("Dataclass", {"frozen": False}), T.Clause("Entry"), T.Clause("Union", {"frozen": False}),
-                 T.Clause("Intersection", {"frozen": False}), T.Clause("Alias"), T.Clause("NativeAlias"), T.Clause("ListAlias"))
-"""Classes that are not frozen, and every relation's entry class."""
+                 T.Clause("Intersection", {"frozen": False}), T.Clause("Alias"), T.Clause("NativeAlias"), T.Clause("ListAlias"),
+                 *[T.Clause(reason) for reason in DROPS])
+"""Classes that are not frozen, every relation's entry class and every alias, and every drop."""
 
 
 
@@ -1111,6 +1276,13 @@ def read(module: Py.Module, schemas: Stores.Store | None = None) -> T.Session:
     session = T.Session(store(Proxies.OfStore() if schemas is None else schemas, module), list(FROM_PYTHON))
     session.run(T.Policy(T.Clause("Schema"), T.Clause("AliasSchema")))
     return session
+
+
+def dropped(session: T.Session) -> list[tuple[str, str, str, str]]:
+    """What a generation's drop steps dropped, in the order they did: each schema's name, where in it (`""` for the
+    schema itself, else a property, adjacency, link, branch or part, `name[item]` within a list), the transform that
+    dropped it, and why (`DROPS`)."""
+    return [(schema.name, where, reason, DROPS[reason]) for schema, reason, where in session.store.singleton(OUTPUT).dropped]
 
 
 def missing(session: T.Session) -> list[Any]:

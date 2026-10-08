@@ -43,11 +43,11 @@ not report it, and reading back did not restore it. 0.9.1 writes and reads each,
 | Construct | Python bridge | Ambiguity, as a parameter | Status |
 |---|---|---|---|
 | Basic native (`bool`, `int`, `float`, `str`, `bytes`) | Python's own type | none | built |
-| `python3` token of a basic native | the same type, the token in metadata: `Annotated[int, {"native": ["python3", "int"]}]`, so that it reads back as `python3` | none | built (0.12). Another `python3` token (`decimal.Decimal`) has no host type in mbse-schemas' proxies, so no class |
-| Native of another format (`ccpp` `int32_t`, `typescript5` `number`) | none: not bridged (CODEGEN.md, Resolved, Natives codegen supports). Such a native has no class, and `missing` reports it | none | not bridged |
+| `python3` token of a basic native | the same type, the token in metadata: `Annotated[int, {"native": ["python3", "int"]}]`, so that it reads back as `python3` | none | built (0.12). Another `python3` token (`decimal.Decimal`) is invalid since mbse-schemas 0.10, as the user decided |
+| Native of another format (`ccpp` `int32_t`, `typescript5` `number`) | none: only Python's and basic natives are supported (CODEGEN.md, Resolved). A named one has no alias, and every reference to it is `Any`; an inline one is `Any` where it is held | none | dropped (0.15, `DropFormat`); an open question |
 | Width in bits or bytes, an int | metadata: `Annotated[int, {"bits": 32}]` | none | built (0.11) |
 | A native's own description | metadata: `Annotated[int, {"description": "a count"}]` | none | built (0.11) |
-| Width as a term | the term, rendered by `Codegen/Expressions` | | waits on Codegen/Expressions |
+| Width as a term | the term, written with the parameters' TypeVars (CODEGEN.md, Resolved) | | not built yet: the parametric bridge (Codegen/Expressions for a compound term); a schema holding one has no class yet |
 | Named native (`Word`) | `type Word = str`, its description in `Annotated` metadata | none: a `NewType` was considered, but it cannot hold the `Annotated` metadata, and a proxy's value is the plain `str` anyway | built (0.10) |
 
 ## Objects
@@ -63,7 +63,7 @@ not report it, and reading back did not restore it. 0.9.1 writes and reads each,
 | Property's description | `field(default=None, metadata={"description": ...})`, as an adjacency's `"me"` | none | built (0.9.1) |
 | Adjacency | as specified (mbse-schemas' FRAMEWORK.md, Resolved, Adjacencies): one field named after it, an Iterable over full entries of the relation's entry class: `phones: tuple[Phones, ...] = ()` | none: any Iterable meets the contract, so there is nothing to choose. A set sorted by a comparator is an open question | built (0.6) |
 | Adjacency's description | in the field's metadata | none | built (0.9.1) |
-| Inline object schema as a property's type | a class nested in its owner (`Contact.Address`) | `name`: Python needs one, by default the property's name in CamelCase | feasible: no candidate today |
+| Inline object schema as a property's type | none: a Python class needs a name, which is the schema's to give (CODEGEN.md, Resolved) | none | dropped (0.15, `DropInline`): `Any` where it is held; an open question |
 | Anonymous adjacency (the TODO's: participation without storage) | no field. A class variable may list them | | waits on mbse-schemas |
 
 ## Relations
@@ -73,7 +73,7 @@ not report it, and reading back did not restore it. 0.9.1 writes and reads each,
 | Named relation | entry class: a field per link, then its properties; `LINKS`, `UNIQUES` | none | built |
 | Relation's property description | in the field's metadata, as an object's | none | built (0.9.1) |
 | Self-relation adjacencies | `field(default=(), metadata={"me": ...})` | none | built |
-| Unnamed relation | an entry class needs a name | `name` | feasible: no candidate today |
+| Unnamed relation | none: an entry class needs a name (CODEGEN.md, Resolved) | none | dropped (0.15, `DropInline`): an adjacency to one holds `tuple[Any, ...]` |
 
 ## Unions and intersections
 
@@ -84,8 +84,8 @@ not report it, and reading back did not restore it. 0.9.1 writes and reads each,
 | Named intersection | value class, a field per part | `frozen` | built |
 | Flat intersection | class of its parts' properties, `PARTS` | `frozen` | built |
 | Branch's or part's description | field metadata; in a flat union, `Annotated` metadata; in a flat intersection, `DESCRIPTIONS` | none | built (0.9.1) |
-| Inline union or intersection as a property's type | a nested class, or a nested alias | `name`, as for an inline object | feasible: no candidate today |
-| Branch of an inline type | a nested class of the union | `name` | feasible: no candidate today |
+| Inline union or intersection as a property's type | none, as an inline object schema (CODEGEN.md, Resolved) | none | dropped (0.15, `DropInline`) |
+| Branch of an inline type | none, as an inline object schema (CODEGEN.md, Resolved) | none | dropped (0.15, `DropInline`): the branch is `Any` |
 
 ## Lists
 
@@ -95,16 +95,16 @@ not report it, and reading back did not restore it. 0.9.1 writes and reads each,
 | Keyed by a native a `dict` compares as schema equality does (`str`, `int`, `bool`, `bytes`) | `dict[K, V]` | none | built |
 | Keyed by a `float`, a list, a value object, a union or an intersection | `Proxies.OfIndexed.Map[K, V]`, mbse-schemas' keyed list (CODEGEN.md, Resolved, Keys a `dict` cannot hold faithfully) | none: the user decided the form; keys need not be hashable, so no class must be frozen | built (0.13). Until 0.13 a `float` key was a `dict`, which lost `-0.0` against `0.0` and every NaN |
 | Extent with int bounds | `Annotated[list[T], {"minimum": 0, "maximum": 9}]`, the maximum only where it has one | none: a fixed `tuple[T, T, T]` was considered, but an extent bounds a list's keys, not how many items it holds | built (0.11) |
-| Extent with a term | the term, rendered by `Codegen/Expressions` | | waits on Codegen/Expressions |
+| Extent with a term | the term, written with the parameters' TypeVars: a tensor's shape (CODEGEN.md, Resolved) | | not built yet: the parametric bridge; a schema holding one has no class yet |
 | Named list (`Names`) | `type Names = list[str]`, a dict keyed by a named native too | none | built (0.10) |
-| Lists nested to any depth | as above | none | built (0.9): `Types.Rendered` applies itself to the item, replacing `DEPTH`, which unrolled the check four deep |
+| Lists nested to any depth | as above | none | built (0.9); since 0.15 only `Types.Unbuilt`, a predicate that applies itself to the item, keeps a type from rendering |
 
 ## Parametrics
 
 | Construct | Python bridge | Ambiguity, as a parameter | Status |
 |---|---|---|---|
-| Value parameters (`Matrix[rows, cols]`) | Python has no value parameters. Options: class variables set by a subclass per application (`class Matrix3x4(Matrix)`), `Literal` type parameters (`class Matrix[R: int, C: int]` applied as `Matrix[Literal[3], Literal[4]]`), or instance fields that are checked | `form`, as FRAMEWORK.md decided ("a parameter of the generating step") | feasible once the options are chosen; needs a decision |
-| Application (`OfApply`) with literal arguments | the parametric class, applied in the form chosen above | follows the parametric's `form` | feasible with the above |
+| Value parameters (`Matrix[rows, cols]`) | TypeVars, as the user decided (CODEGEN.md, Resolved): proposed, PEP 695 type parameters bounded by the parameters' types, `class Matrix[rows: int, cols: int]` | none: the form is decided | not built yet: the parametric bridge; never dropped |
+| Application (`OfApply`) with literal arguments | proposed, `Literal` type arguments: `Matrix[Literal[3], Literal[4]]` | none | not built yet: the parametric bridge |
 | Arguments that are terms | rendered by `Codegen/Expressions` | | waits on Codegen/Expressions |
 | Type parameters | `class Box[T]` | | waits on mbse-schemas (type parameters are not built) |
 
@@ -134,11 +134,13 @@ not report it, and reading back did not restore it. 0.9.1 writes and reads each,
    and wrote, by role, as relations whose entries hold their paths.
 4. The deterministic rows without parameters: named natives and lists as aliases (0.10, done), widths, natives' own
    descriptions and extents with int bounds (0.11, done), `python3` tokens (0.12, done).
-5. The rows with a parameter: inline schemas (`name`), awaiting the user's decision; keys of schemas (0.13) and
-   dotted names (0.14) need none, and other formats' natives are not bridged (no `host`).
-6. Bindings (`bound`).
-7. Value parameters and applications, once their `form` options are chosen.
-8. Rows that wait on other repositories: terms (Codegen/Expressions), type parameters and anonymous adjacencies
+5. The rows with a parameter: none remain. Keys of schemas (0.13) and dotted names (0.14) need none, other formats'
+   natives are not bridged (no `host`), and inline schemas are dropped (no `name`).
+6. **Drops as steps** (0.15, done): every type that gets no Python form is dropped by a transform step of its own, which says why
+   (CODEGEN.md, Resolved, Inline schemas are dropped).
+7. Bindings (`bound`).
+8. Value parameters and applications, once their `form` options are chosen.
+9. Rows that wait on other repositories: terms (Codegen/Expressions), type parameters and anonymous adjacencies
    (mbse-schemas).
 
 ---

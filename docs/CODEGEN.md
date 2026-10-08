@@ -35,27 +35,36 @@ requires.
 
 | Transform | Symbols | Before | After | Parameters |
 |---|---|---|---|---|
-| `Dataclass` | `s`: `Schemas.OfObject.Schema` | `s` is named, declares no parameters, every property's type renders, and every adjacency is to a named relation | the module has a class named after `s` | `frozen`: `bool` |
-| `Union` | `s`: `Schemas.OfUnion.Schema` | `s` is named, not `flat`, declares no parameters, has branches, and every branch's type renders | the module has a class named after `s` | `frozen`: `bool` |
-| `Intersection` | `s`: `Schemas.OfIntersection.Schema` | `s` is named, declares no parameters, has parts, and every part's type renders, or, `flat`, is an object schema whose properties render | the module has a class named after `s` | `frozen`: `bool` |
-| `Alias` | `s`: `Schemas.OfUnion.Schema` | `s` is named, `flat`, declares no parameters, has branches, and every branch's type renders | the module has a type alias named after `s` | none |
-| `Entry` | `r`: `Schemas.OfRelation.Schema` | `r` is named, declares no parameters, every property's type renders, and every link is declared by an object schema | the module has a class named after `r` | none |
+| `Dataclass` | `s`: `Schemas.OfObject.Schema` | `s` is named, declares no parameters, holds no unbuilt type (`Types.Unbuilt`: parameters or terms), and has no adjacency to a relation declaring parameters | the module has a class named after `s` | `frozen`: `bool` |
+| `Union` | `s`: `Schemas.OfUnion.Schema` | `s` is named, not `flat`, declares no parameters, has branches, and holds no unbuilt type (`Types.Unbuilt`: parameters or terms) | the module has a class named after `s` | `frozen`: `bool` |
+| `Intersection` | `s`: `Schemas.OfIntersection.Schema` | `s` is named, declares no parameters, has parts, and holds no unbuilt type (`Types.Unbuilt`: parameters or terms), its inline parts' properties included where `flat` | the module has a class named after `s` | `frozen`: `bool` |
+| `Alias` | `s`: `Schemas.OfUnion.Schema` | `s` is named, `flat`, declares no parameters, has branches, and holds no unbuilt type (`Types.Unbuilt`: parameters or terms) | the module has a type alias named after `s` | none |
+| `Entry` | `r`: `Schemas.OfRelation.Schema` | `r` is named, declares no parameters, holds no unbuilt type (`Types.Unbuilt`: parameters or terms), and no link is declared by an object schema declaring parameters | the module has a class named after `r` | none |
 | `Schema` | `c`: `Programs.Python.ClassDef` | `c` is decorated `@dataclass` or `@dataclass(...)` | a relation named after `c` has its links, or an object schema named after `c` has a property or adjacency per field, is `ref` where `c` is `eq=False`, and is described where `c` has a docstring | none |
-| `NativeAlias` | `s`: `Schemas.OfNative.Schema` | `s` is named, declares no parameters, and is a basic native without a width | the module has a type alias named after `s` | none |
-| `ListAlias` | `s`: `Schemas.OfIndexed.Schema` | `s` is named, declares no parameters and no extent, its key (if any) is a native, basic or named, and its item renders | the module has a type alias named after `s` | none |
+| `NativeAlias` | `s`: `Schemas.OfNative.Schema` | `s` is named, declares no parameters, is a basic or a `python3` native, and its width is no term | the module has a type alias named after `s` | none |
+| `ListAlias` | `s`: `Schemas.OfIndexed.Schema` | `s` is named, declares no parameters, its extent is of int bounds if any, and its item and key are not unbuilt | the module has a type alias named after `s` | none |
 | `AliasSchema` | `al`: `Programs.Python.TypeAlias` | always | a schema named after `al` has been read: a union with branches, a native with a token, or a list with an item | none |
+| `DropInline`, `DropFormat`, `DropUndeclared` | `s` (`r` for a relation): a meta-schema of each kind a reason applies to | `s` is named and holds a type dropped for the reason (an inline object, union, intersection or relation; another format's native; a link no object schema declares), or, `DropFormat`, is another format's native | the output records the drop (`Codegen.Dropped`): `s`, the reason, and where | none |
 
 - **A class is one step**, with all its fields: its one decision is `frozen`, and the fields follow from the schema.
   A symbol binds a schema, never a property: a property is a value within a schema, read with `get`, quantified over
   (`s.get("properties").all(...)`) and compared deeply (mbse-expressions' Basic). A decision about one property, when
   there is one to take, will be a parameter of the schema's step.
-- **What renders**: a basic native as Python's name for it (`str`, `int`, `float`, `bool`, `bytes`), without a width
-  or a description of its own, which Python's type cannot hold, a named
-  object schema, union, intersection, native or list by its name, a positional list as `list[...]` and a keyed list as
-  `dict[K, V]` or `Proxies.OfIndexed.Map[K, V]` (see Keyed lists), of any of these, nested to any depth: `Types.Rendered` is a predicate that
-  applies itself to a list's item (mbse-patterns 0.8.2). A width or an extent that is a term, a native with
-  parameters, and an application have no Python form yet: a schema with such a property has no candidate, rather than
-  a dataclass field that names nothing.
+- **What renders**: a basic or `python3` native as Python's name for it (`str`, `int`, `float`, `bool`, `bytes`), a
+  named object schema, union, intersection, native or list by its name, a positional list as `list[...]` and a keyed
+  list as `dict[K, V]` or `Proxies.OfIndexed.Map[K, V]` (see Keyed lists), of any of these, nested to any depth; a type
+  dropped (see Drops) as `Any`. A type with parameters or terms is unbuilt (`Types.Unbuilt`, a predicate that applies
+  itself to a list's item, mbse-patterns 0.8.2): a schema holding one has no class yet, rather than a field that names
+  nothing, until the parametric bridge (see Open questions).
+- **Drops are steps** (0.15; see Resolved). A type with no Python form is dropped by a step of its own, one transform
+  per reason (`Types.DROPS`): `DropInline`, `DropFormat`, `DropUndeclared`. The step's schema is the named schema that
+  is dropped as a whole (another format's native: no alias) or that holds the dropped type, which keeps its class; the
+  output records each drop, `Codegen.Dropped`, and `Types.dropped(session)` reports them in order, each the schema's
+  name, where in it (`""`, a property, adjacency, link, branch or part, `codes[item]` within a list), the transform and
+  why. Where a dropped type is held, and wherever a schema dropped as a whole is named, the annotation is `Any`, which
+  reading back refuses ("Any is a dropped type, which reading cannot restore"). A reason applies to several kinds of
+  schema, and a transform's symbol to one, so each reason is a transform per kind it applies to (`Types.DROP`), all of
+  one name.
 - **Keyed lists**, as decided (see Resolved): a list keyed by a native a `dict` compares as schema equality does (`str`,
   `int`, `bool`, `bytes`, named or not) is `dict[K, V]`; any other key (a `float`, whose NaNs a `dict` never matches
   and whose `-0.0` it merges with `0.0`, a list, a value object, a union, an intersection) makes it mbse-schemas'
@@ -82,8 +91,10 @@ requires.
   (`Types.problems(session)`), and taking the source (`Types.text(session)`) with any left is a `ValueError` listing
   them all. A property named by a keyword is a field with a trailing underscore (`from_`), read back without it: a
   spelling, not a loss.
-- **Completeness is reported**: `Types.missing(session)` lists the object schemas no class renders, in name order, so
-  a field naming one of them (a schema renders by naming any object schema) is seen, not silently left undefined.
+- **Completeness is reported**: `Types.missing(session)` lists the named schemas no class or alias renders, each kind
+  in name order: those dropped as a whole and those unbuilt (or invalid, such as a union without branches). A schema
+  unbuilt only for what it holds (`Card`, holding an application) still lets a class that names it be written, a
+  name the module does not define, until the parametric bridge.
 - **Objects read alike, whatever implements them.** Generated classes have the members mbse-schemas' proxies have, so
   that code written against one works on the other without change: a property is a field, and an adjacency is as
   mbse-schemas' FRAMEWORK.md specifies under Resolved (Adjacencies): "adjacencies are always stored in a class under
@@ -154,6 +165,21 @@ requires.
 
 ## Open questions
 
+- **Inline schemas (`DropInline`).** An inline object, union, intersection or relation is dropped, its place `Any`,
+  since a class needs a name that is the schema's to give. Should one ever get a Python form: a name the schema gives
+  some other way, or a convention that is not a name codegen invents?
+- **Natives of other formats (`DropFormat`).** Only Python's and basic natives are supported. Should another format's
+  native ever map to a Python type, by an equivalence mbse-schemas declares (a `ccpp` `int32_t` as a 32-bit `int`)
+  rather than by a choice codegen makes?
+- **Undeclared links (`DropUndeclared`).** A relation's link that no object schema declares has no type, so its entry
+  class's field is `Any`. Is that a defect of the model, for mbse-schemas' validation of a store to report, rather
+  than a drop?
+- **Parametric schemas and tensors.** A parametric schema uses TypeVars (see Resolved); its proposed form is PEP 695
+  type parameters bounded by the parameters' types (`class Matrix[rows: int, cols: int]`), applications with
+  `Literal` arguments (`Matrix[Literal[3], Literal[4]]`), and a term that is a parameter written as that TypeVar.
+  Open: how a compound term (`rows - 1`, an extent's maximum) is written in `Annotated` metadata (its source text, its
+  mbse-expressions form, or a function of the TypeVars), and where a parameter's description goes.
+
 - **Model parameters.** A parametric schema as a generic dataclass (`class Matrix[T]`) needs type parameters, which
   mbse-schemas has not built yet; value parameters (an extent's bound) have no Python construct.
 - **Runtime bindings.** The generated classes hold relations as containers, but are not bound to a store: generating
@@ -167,6 +193,26 @@ requires.
   beside the classes) is Codegen/Patterns' work, with the constraints.
 
 ## Resolved
+
+- **Parametric schemas are not dropped**, as the user decided: "DropParametric? Absolutely not." Parameters stay
+  parameters in generated code (mbse-schemas' FRAMEWORK.md, Parametrics), and a parametric schema uses TypeVars. Nor
+  are terms dropped, since a term is an expression over parameters. Tensor types must be representable: a list
+  (`OfIndexed`) whose shape is constrained (its extents, nested a list per dimension) by terms that may use parameters
+  (`Matrix[rows, cols]`). Until the parametric bridge is built, a schema with parameters or terms has no class and
+  `missing` reports it; it is not dropped.
+
+- **Inline schemas are dropped**, as the user decided: "yes, drop it." An inline object, union, intersection or
+  relation has no name, and a Python class needs one, which is the schema's to give, so codegen invents none. And: "A
+  report of all dropped types and reasons should be easy to obtain ... as dropping transform steps": every type that
+  gets no Python form is dropped by a transform step of its own, whose transform says why, so the trace is the report.
+  The reasons, for now, are three, each with an open question (see Open questions): `DropInline` (an inline object,
+  union, intersection or relation), `DropFormat` (a native of another format) and `DropUndeclared` (a relation's link
+  that no object schema declares). Parameters and terms are not reasons (see Parametric schemas), nor a `python3`
+  token that is not a basic type's name, which mbse-schemas does not let a schema configure.
+- **References to a dropped type are `Any`**, as the user decided: "anything that references a dropped type should be
+  demoted to Any." So a dropped type costs only its own place: a property, a branch, a list's item, a link whose type
+  is dropped is `Any` there, and the schema holding it still has its class; a named schema dropped as a whole (a
+  native of another format) has no alias, and every reference to it is `Any`.
 
 - **Dotted names are nested classes**, as the user asked ("what about nested classes?") and decided, case by case: a
   prefix that is also a schema's name, its class holds those nested in it, "(a)", and of a nested class under the

@@ -133,7 +133,10 @@ check(proxy.items.map((entry: any) => entry.since).join() === "2020", "proxies")
    `python3` token (`{"native": ["python3", "int"]}`). A list keyed by a `float`, a list or a value object is
    mbse-schemas' `Proxies.OfIndexed.Map[K, V]`, which compares keys as schema equality does; others are `dict[K, V]`.
    A dotted name (`Codegen.Output`) is a class nested in its prefix's class, its `__qualname__` the schema's name.
-   `Types.missing(session)` lists the object schemas left without a class.
+   A type with no Python form is dropped by a step (`DropInline`, `DropFormat`, `DropUndeclared`): `Any` where it is
+   held; `Types.dropped(session)` reports each with its reason and place. Parameters and terms are not dropped: a
+   schema with them has no class until the parametric bridge (TypeVars), and `Types.missing` reports it.
+   `Types.missing(session)` lists the schemas left without a class or alias.
 3. **What reads back.** A `@dataclass` class (`@dataclass(...)` too) whose annotations are written as `Dataclass`
    writes them, `| None` or not; anything else raises `ValueError` naming the field. Reading registers the schemas in
    the store given, and fills a schema a field names when its class is read.

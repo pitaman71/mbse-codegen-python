@@ -33,6 +33,10 @@
  *   `type Names = list[Word]`), as a proxy reads its value, and a field names it.
  * - `AliasSchema` reads a type alias of the module back: a flat union of `A | B | ...`, a named native, or a named list.
  *
+ * A type with no Python form is dropped by a step of its own, one transform per reason (`DROPS`: `DropInline`,
+ * `DropFormat`, `DropUndeclared`), which the output records and `dropped(session)` reports; where it is held it is
+ * `Any`. A type with parameters or terms is not dropped but unbuilt (`Unbuilt`): a schema holding one has no class
+ * until the parametric bridge (TypeVars), and `missing(session)` reports it.
  * Each step links what it wrote, by role: a `class`, an `alias`, or, reading back, a `schema` (mbse-patterns' `Wrote`).
  * `generate(schemas, policy, earlier)` and `read(module, schemas)` run each to the end. `frozen` is the one thing a
  * schema does not hold: reading code back loses it, and the trace of the generation keeps it. A generation given the
@@ -62,8 +66,13 @@ export const Generated = new S.OfRelation.Builder().name("Codegen.Generated").li
  * names a class by it (`Codegen.Output/defined[name="Contact"]`, mbse-schemas' `Paths`), wherever the class is. */
 export const Defined = new S.OfRelation.Builder().name("Codegen.Defined").links("output", "node").properties(
   (p) => p.name("name").of((t) => t.as_native(String))).unique("output", "name").create();
+/** What the drop steps dropped: a schema, the transform that dropped it (`DROPS`), and where in it (`""` for the
+ * schema itself, else a property, branch or part, `name[item]` within a list). */
+export const Dropped = new S.OfRelation.Builder().name("Codegen.Dropped").links("output", "schema").properties(
+  (p) => p.name("reason").of((t) => t.as_native(String)), (p) => p.name("where").of((t) => t.as_native(String))).create();
 const OutputSchema = new S.OfObject.Builder().name(OUTPUT).ref().singleton(OUTPUT).relations(
-  (r) => r.name("modules").of(Generated).me("output"), (r) => r.name("defined").of(Defined).me("output")).create();
+  (r) => r.name("modules").of(Generated).me("output"), (r) => r.name("defined").of(Defined).me("output"),
+  (r) => r.name("dropped").of(Dropped).me("output")).create();
 
 let outputs = 0;
 
@@ -72,7 +81,11 @@ export class Output {
   static Schema = OutputSchema;
   readonly #identity = `output ${++outputs}`;
 
-  constructor(public module: Py.Module | null = null) {}
+  readonly dropped: [unknown, string, string][];
+
+  constructor(public module: Py.Module | null = null, dropped: Iterable<[unknown, string, string]> = []) {
+    this.dropped = [...dropped];
+  }
 
   identity(): string {
     return this.#identity;
@@ -95,14 +108,21 @@ const BINDING = new Bindings.Binding(OutputSchema,
   (output: Output) => new Bindings.State(new Map(), new Map([
     ["modules", (output.module === null ? [] : [output.module]).map((m) => new Bindings.Entry(new Map([["module", m]])))],
     ["defined", [...(output.module === null ? new Map<string, unknown>() : definitions(output.module))].map(
-      ([named, node]) => new Bindings.Entry(new Map([["node", node]]), new Map([["name", named]])))]])),
-  (state: Bindings.State) => new Output(...(state.entries.get("modules") ?? []).map((e) => e.links.get("module") as Py.Module)));
+      ([named, node]) => new Bindings.Entry(new Map([["node", node]]), new Map([["name", named]])))],
+    ["dropped", output.dropped.map(([schema, reason, where]) => new Bindings.Entry(new Map([["schema", schema]]),
+      new Map([["reason", reason], ["where", where]])))]])),
+  (state: Bindings.State) => {
+    const output = new Output(...(state.entries.get("modules") ?? []).map((e) => e.links.get("module") as Py.Module));
+    output.dropped.push(...(state.entries.get("dropped") ?? []).map((e) => [e.links.get("schema"), e.properties.get("reason") as string,
+      e.properties.get("where") as string] as [unknown, string, string]));
+    return output;
+  });
 
 /** The store a session runs over: the schemas `schemas` registers and those they refer to, Python's syntax trees, and
  * the output, which holds `module`. */
 export function store(schemas: Stores.Store, module: Py.Module): Stores.Combined {
   const outputs = new Bindings.OfStore([[OutputSchema, (instance?: Output) => new Bindings.Builder(BINDING, instance)]],
-    [Generated, Defined]);
+    [Generated, Defined, Dropped]);
   (outputs.singleton(OUTPUT) as unknown as Output).module = module;
   return new Stores.Combined(Reflection.of(schemas), Py.LANGUAGE.Builders as never, outputs);
 }
@@ -127,41 +147,185 @@ function pythonic(native: E.Writer): E.Writer {
     NATIVES.map((named) => native.get("token").eq(named)).reduce((either, other) => either.or_(other))));
 }
 
-/** A native Python's types hold (see `pythonic`), its width, description and a `python3` token in `Annotated`
- * metadata: one without parameters or a width that is a term, which wait on parameters' Python form. */
-function basic(type: E.Writer): E.Writer {
-  const native = type.get("native");
-  return pythonic(native).and_(native.has("terms").not_()).and_(native.has("parameters").not_());
-}
-
 /** Whether a list's extent, if it has one, is of int bounds, which `Annotated` metadata holds. */
 function bounded(indexed: E.Writer): E.Writer {
   return indexed.has("extent").not_().or_(indexed.get("extent").has("terms").not_());
 }
 
-/** A basic native, or a named schema of a kind that a class or an alias renders: an object schema, a union, an
- * intersection, a native or a list. */
-function simple(type: E.Writer): E.Writer {
-  const named = [S.OfObject.Schema, S.OfUnion.Schema, S.OfIntersection.Schema, S.OfNative.Schema, S.OfIndexed.Schema].map((meta: any) =>
-    P.Exists((q) => q.symbols({ x: meta }).requires(x.get("name").eq(type.get("named").get("name"))))) as unknown[];
-  return basic(type).or_(E.operation("and", type.has("named"),
-    named.reduce((either, other) => E.operation("or", either as never, other as never)) as never));
-}
-
-/** Whether `Dataclass` renders a type `t`: a simple one, or a list of one it renders, its extent if any of int bounds,
- * positional or keyed by a type it renders, nested to any depth. It applies itself to the list's item. */
-export const Rendered = new P.OfPredicate.Builder().name("Codegen.Rendered").parameters((q) => q.name("t")).create();
-new P.OfPredicate.Builder(Rendered).requires(simple(t).or_(t.has("indexed").and_(bounded(t.get("indexed"))).and_(
-  t.get("indexed").has("key").not_().or_(Rendered.call(t.get("indexed").get("key")) as never)).and_(
-  Rendered.call(t.get("indexed").get("item")) as never))).update();
-
-/** Whether `Dataclass` renders the type: `Rendered` applied to it. */
-function rendered(type: E.Writer): any {
-  return Rendered.call(type);
-}
-
 function over(symbols: Record<string, S.OfObject.Data>, constraint: unknown) {
   return new P.OfPredicate.Builder().symbols(symbols).requires(constraint as never).create();
+}
+
+// --- Drops: what has no Python form, and why ---
+
+/** Why a type has no Python form, by the transform that drops it (CODEGEN.md, Resolved; each an open question). A type
+ * dropped where it is held is `Any` there, and the schema holding it keeps its class; a named native of another format
+ * has no alias, and every reference to it is `Any`. */
+export const DROPS: Record<string, string> = {
+  DropInline: "an inline schema: a Python class needs a name, which is the schema's to give",
+  DropFormat: "a native of another format: only Python's and basic natives are supported",
+  DropUndeclared: "a link no object schema declares, which has no type",
+};
+
+/** Why a named schema has no Python form at all: a native of another format; none for any other. */
+function itself(schema: any): string[] {
+  return schema instanceof S.OfNative.Data && ![S.BASIC, S.PYTHON3].includes((schema.token as S.OfNative.Token).format) ? ["DropFormat"] : [];
+}
+
+/** Why a type, where it is held, has no Python form: an inline object, union, intersection or relation, or an inline
+ * native of another format. A named schema is not dropped where it is held: a reference to one dropped as a whole is
+ * `Any` (see `demoted`), and its own step says why. */
+function held(type: any): string[] {
+  if (type.name !== null) return [];
+  if (type instanceof S.OfObject.Data || type instanceof S.OfUnion.Data || type instanceof S.OfIntersection.Data
+    || type instanceof S.OfRelation.Data) return ["DropInline"];
+  return itself(type);
+}
+
+/** Whether a type is written as `Any`: dropped where it is held, or a reference to a schema dropped as a whole. */
+function demoted(type: any): boolean {
+  return (type.name !== null ? itself(type) : held(type)).length > 0;
+}
+
+/** The drops of a type held at `where`, by reason, and of the types an inline list it is holds. */
+function dropsAt(type: any, where: string): [string, string][] {
+  const reasons = held(type);
+  if (reasons.length > 0) return reasons.map((reason) => [reason, where]);
+  if (type instanceof S.OfIndexed.Data && type.name === null) {
+    return [...dropsAt(type.item, `${where}[item]`), ...(type.key === null ? [] : dropsAt(type.key, `${where}[key]`))];
+  }
+  return [];
+}
+
+/** What of a named schema has no Python form, by reason and place: the schema itself (`""`), or a property, an
+ * adjacency, a link, a branch, a part, or a list's item or key, where the schema itself has a form. */
+function drops(store: any, schema: any): [string, string][] {
+  const whole = itself(schema);
+  if (whole.length > 0) return whole.map((reason) => [reason, ""]);
+  if (schema instanceof S.OfIndexed.Data) return [...dropsAt(schema.item, "item"), ...(schema.key === null ? [] : dropsAt(schema.key, "key"))];
+  const properties = (owner: any): [string, string][] => [...owner.properties].flatMap(([named, prop]: [string, any]) => dropsAt(prop.type, named));
+  if (schema instanceof S.OfRelation.Data) {
+    const objects = [...store.extent("Schemas.Object")];
+    return [...properties(schema), ...schema.links.filter((link) => declarers(objects, schema, link).length === 0)
+      .map((link) => ["DropUndeclared", link] as [string, string])];
+  }
+  if (schema instanceof S.OfObject.Data) {
+    return [...properties(schema), ...[...schema.adjacencies].filter(([, adjacency]) => (adjacency.relation as any).name === null)
+      .map(([named]) => ["DropInline", named] as [string, string])];
+  }
+  const members = (schema instanceof S.OfUnion.Data ? schema.branches : schema.parts) as any[];
+  if (schema instanceof S.OfIntersection.Data && schema.flat) {
+    return members.filter((part) => part.type.name === null).flatMap((part) => [...part.type.properties].flatMap(
+      ([named, prop]: [string, any]) => dropsAt(prop.type, `${part.name}.${named}`)));
+  }
+  return members.flatMap((member) => dropsAt(member.type, member.name));
+}
+
+/** Whether a native, as reflected, is of another format than Python's and basic. */
+function foreign(native: E.Writer): E.Writer {
+  return native.get("format").eq("basic").not_().and_(native.get("format").eq("python3").not_());
+}
+
+/** Whether the type `type`, where it is held, is dropped for `reason` (as `held`). */
+function at(reason: string, type: E.Writer): E.Writer {
+  if (reason === "DropInline") return type.has("object").or_(type.has("union")).or_(type.has("intersection"));
+  return type.has("native").and_(foreign(type.get("native")));
+}
+
+/** Whether a type `t` is dropped for `reason` where it is held, or holds one that is within an inline list, at any
+ * depth (as `dropsAt`). It applies itself to the list's item and key. */
+function somewhere(reason: string): P.OfPredicate {
+  const found = new P.OfPredicate.Builder().name(`Codegen.${reason}`).parameters((q) => q.name("t")).create();
+  const indexed = t.get("indexed");
+  new P.OfPredicate.Builder(found).requires(at(reason, t).or_(t.has("indexed").and_(E.operation("or",
+    found.call(indexed.get("item")) as never, indexed.has("key").and_(found.call(indexed.get("key")) as never))))).update();
+  return found;
+}
+
+const SOMEWHERE: Record<string, P.OfPredicate> = { DropInline: somewhere("DropInline"), DropFormat: somewhere("DropFormat") };
+
+/** Whether the schema `z` of `kind` holds a type dropped for `reason` (as `drops`); null where it never does. */
+function heldAt(reason: string, kind: string, z: E.Writer): E.Writer | null {
+  if (reason === "DropUndeclared") {
+    return kind === "relation" ? z.get("links").any("l", E.operation("not", P.Exists((q) => q.symbols({ y: S.OfObject.Schema })
+      .requires(declares(y, l))) as never)) : null;
+  }
+  const found = SOMEWHERE[reason] as P.OfPredicate;
+  const each = (listed: string) => z.has(listed).and_(z.get(listed).any("p", found.call(p.get("type")) as never));
+  if (kind === "object" || kind === "relation") {
+    const properties = each("properties");
+    const inline = z.has("adjacencies").and_(z.get("adjacencies").any("a", a.get("relation").has("relation")));
+    return kind === "object" && reason === "DropInline" ? properties.or_(inline) : properties;
+  }
+  if (kind === "union") return each("branches");
+  if (kind === "intersection") {
+    const flat = z.get("parts").any("p", p.get("type").has("object").and_(p.get("type").get("object").has("properties")).and_(
+      p.get("type").get("object").get("properties").any("q", found.call(E.variable("q").get("type")) as never)));
+    return z.has("flat").not_().and_(each("parts")).or_(z.has("flat").and_(z.has("parts")).and_(flat));
+  }
+  if (kind === "list") return E.operation("or", found.call(z.get("item")) as never, z.has("key").and_(found.call(z.get("key")) as never));
+  return null;
+}
+
+function dropping(reason: string) {
+  return (store: Stores.Combined, match: Record<string, unknown>): void => {
+    const schema = Object.values(match)[0];
+    (store.singleton(OUTPUT) as unknown as Output).dropped.push(...drops(store, schema).filter(([found]) => found === reason)
+      .map(([found, where]) => [schema, found, where] as [unknown, string, string]));
+  };
+}
+
+const DROP_KINDS: [string, any][] = [["object", S.OfObject.Schema], ["relation", S.OfRelation.Schema], ["union", S.OfUnion.Schema],
+  ["intersection", S.OfIntersection.Schema], ["native", S.OfNative.Schema], ["list", S.OfIndexed.Schema]];
+
+/** A transform per reason and kind of schema it applies to, named after the reason: before, a named native of another
+ * format (`DropFormat` as a whole), or a schema holding a type dropped for the reason; after, the output records it
+ * (`Codegen.Dropped`). */
+function dropTransforms(): T.Transform[] {
+  const made: T.Transform[] = [];
+  for (const reason of Object.keys(DROPS)) {
+    for (const [kind, meta] of DROP_KINDS) {
+      const symbol = kind === "relation" ? "r" : "s";
+      const z = E.variable(symbol);
+      const whole = kind === "native" && reason === "DropFormat" ? foreign(z) : null;
+      const inside = heldAt(reason, kind, z);
+      if (whole === null && inside === null) continue;
+      const recorded = P.Exists((q) => q.symbols({ o: OutputSchema }).requires(E.quantifier("any", "e", E.operation("entries", o, "dropped"),
+        E.variable("e").get("schema").eq(z).and_(E.variable("e").get("reason").eq(reason))) as never));
+      made.push(new T.Transform(reason, over({ [symbol]: meta }, z.has("name").and_((inside ?? whole) as E.Writer)),
+        over({ [symbol]: meta }, recorded), { rewrite: dropping(reason) as never }));
+    }
+  }
+  return made;
+}
+
+// --- Parameters and terms: not built yet ---
+
+/** Whether a type `t` has parameters or terms, whose Python form (TypeVars) is not built yet, there or within an inline
+ * list it is: an application, a native or a list declaring parameters, a width or an extent that is a term, or a
+ * reference to a named schema that declares parameters, has such a width or extent, or is an application. A schema
+ * holding one has no class or alias yet, and `missing` reports it: it is not dropped (CODEGEN.md, Resolved). */
+export const Unbuilt = new P.OfPredicate.Builder().name("Codegen.Unbuilt").parameters((q) => q.name("t")).create();
+
+function namedUnbuilt(type: E.Writer): unknown {
+  const kinds: [any, (z: E.Writer) => E.Writer][] = [[S.OfObject.Schema, (z) => z.has("parameters")],
+    [S.OfUnion.Schema, (z) => z.has("parameters")], [S.OfIntersection.Schema, (z) => z.has("parameters")],
+    [S.OfApply.Schema, (z) => z.has("name")], [S.OfNative.Schema, (z) => z.has("parameters").or_(z.has("terms"))],
+    [S.OfIndexed.Schema, (z) => z.has("parameters").or_(bounded(z).not_())]];
+  const found = kinds.map(([meta, more]) => P.Exists((q) => q.symbols({ x: meta }).requires(x.get("name").eq(
+    type.get("named").get("name"))).requires(more(x))) as unknown);
+  return E.operation("and", type.has("named"), found.reduce((either, other) => E.operation("or", either as never, other as never)) as never);
+}
+
+new P.OfPredicate.Builder(Unbuilt).requires(t.has("apply").or_(
+  t.has("native").and_(t.get("native").has("parameters").or_(t.get("native").has("terms")))).or_(
+  t.has("indexed").and_(t.get("indexed").has("parameters").or_(bounded(t.get("indexed")).not_()))).or_(
+  namedUnbuilt(t) as never).or_(t.has("indexed").and_(E.operation("or", Unbuilt.call(t.get("indexed").get("item")) as never,
+    t.get("indexed").has("key").and_(Unbuilt.call(t.get("indexed").get("key")) as never))))).update();
+
+/** Whether none of the types `z` holds under `listed` is unbuilt (see `Unbuilt`). */
+function built(listed: string, z: E.Writer): E.Writer {
+  return z.has(listed).not_().or_(z.get(listed).all("p", E.operation("not", Unbuilt.call(p.get("type")) as never)));
 }
 
 const l = E.variable("l");
@@ -172,17 +336,19 @@ function declares(schema: E.Writer, link: E.Writer): E.Writer {
     b.get("relation").get("named").get("name").eq(r.get("name"))).and_(b.get("me").eq(link))));
 }
 
-/** Whether the adjacency `a` is to a named relation, whose entry class its field holds. */
-const RELATED = E.operation("and", a.get("relation").has("named"), P.Exists((q) => q.symbols({ r: S.OfRelation.Schema }).requires(
-  r.get("name").eq(a.get("relation").get("named").get("name")))));
-const RENDERABLE = s.has("name").and_(s.has("parameters").not_()).and_(
-  s.has("adjacencies").not_().or_(s.get("adjacencies").all("a", RELATED))).and_(
-  s.has("properties").not_().or_(s.get("properties").all("p", rendered(p.get("type")))));
-/** Whether `Entry` renders the relation `r`: named, without parameters, its properties' types rendered, and each link
- * declared by an object schema, which types it. */
-const ENTRY_RENDERABLE = E.operation("and", r.has("name").and_(r.has("parameters").not_()).and_(
-  r.has("properties").not_().or_(r.get("properties").all("p", rendered(p.get("type"))))),
-  r.get("links").all("l", P.Exists((q) => q.symbols({ y: S.OfObject.Schema }).requires(declares(y, l)))));
+const PARAMETRIC_RELATION = P.Exists((q) => q.symbols({ r: S.OfRelation.Schema as any }).requires(
+  r.get("name").eq(a.get("relation").get("named").get("name"))).requires(r.has("parameters")));
+/** Whether `Dataclass` renders the object schema `s`: named, without parameters, and holding no type that is unbuilt
+ * (see `Unbuilt`), nor an adjacency to a relation that declares parameters. A type that is dropped is `Any` (see
+ * Drops), so it keeps no class from being written. */
+const RENDERABLE = s.has("name").and_(s.has("parameters").not_()).and_(built("properties", s)).and_(
+  s.has("adjacencies").not_().or_(s.get("adjacencies").all("a", E.operation("not", E.operation(
+    "and", a.get("relation").has("named"), PARAMETRIC_RELATION as never)) as never)));
+/** Whether `Entry` renders the relation `r`: named, without parameters, holding no type that is unbuilt, and no link
+ * declared by an object schema that declares parameters. */
+const ENTRY_RENDERABLE = r.has("name").and_(r.has("parameters").not_()).and_(built("properties", r)).and_(
+  r.get("links").all("l", E.operation("not", P.Exists((q) => q.symbols({ y: S.OfObject.Schema }).requires(
+    declares(y, l)).requires(y.has("parameters"))) as never)));
 const o = E.variable("o");
 /** Whether the module defines a class named after `s`, by its qualified name. */
 const HAS_CLASS = P.Exists((q) => q.symbols({ o: OutputSchema }).requires(
@@ -192,8 +358,10 @@ function name(builder: any, spelling: string): any {
   return builder.Name().id(spelling);
 }
 
-/** The annotation of a type `Dataclass` renders. */
+/** The annotation of a type: `Any` for one dropped (see Drops), a named schema by its name, a dotted one as attributes
+ * (`Codegen.Output`, a nested class), or what it holds, in `Annotated` with what that cannot say. */
 function annotation(type: any): (b: any) => any {
+  if (demoted(type)) return (b) => name(b, "Any");
   return type.name !== null ? (b) => dotted(b, type.name) : annotated(structureAnnotation(type), facets(type));
 }
 
@@ -340,10 +508,10 @@ function optionalField(named: string, type: (b: any) => any, description: string
     defaultOf((b: any) => b.Constant().spelling("None"), description === null ? {} : { description })).create();
 }
 
-/** Imports `Annotated` and mbse-schemas' `Proxies` where `built` uses them. */
+/** Imports `Annotated`, `Any` and mbse-schemas' `Proxies` where `built` uses them. */
 function annotations(module: Py.Module, built: any): void {
   const used = new Set([...Trees.walk(built)].filter((node) => node instanceof Py.Name).map((node) => spelling(node)));
-  if (used.has("Annotated")) require(module, "typing", "Annotated");
+  for (const named of ["Annotated", "Any"]) if (used.has(named)) require(module, "typing", named);
   if (used.has("Proxies")) require(module, "mbse.Schemas.Framework", "Proxies");
 }
 
@@ -388,7 +556,8 @@ function render(store: Stores.Combined, match: Record<string, unknown>, args: Re
   for (const [named, adjacency] of schema.adjacencies) {
     const relation = adjacency.relation as S.OfRelation.Data;
     const entries = (b: any) => b.Subscript().value((x: any) => name(x, "tuple")).slice((x: any) => x.Tuple().add_elts(
-      (y: any) => dotted(y, relation.name as string)).add_elts((y: any) => y.Constant().spelling("...")));
+      (y: any) => dotted(y, relation.name === null || itself(relation).length > 0 ? "Any" : relation.name)).add_elts(
+      (y: any) => y.Constant().spelling("...")));
     const metadata: Record<string, MetadataValue> = adjacency.description === null ? {} : { description: adjacency.description };
     if (new Set([...schema.adjacencies.values()].filter((other) => other.relation === relation).map((other) => other.me)).size > 1) {
       metadata["me"] = adjacency.me; // which link, where ambiguous
@@ -408,7 +577,10 @@ function renderEntry(store: Stores.Combined, match: Record<string, unknown>): Ma
   const uniques = relation.uniques.map((unique) => [...unique].sort().join("\u0000")).sort().map((unique) => unique.split("\u0000"));
   const body = [...docstring(relation.description), classVariable("LINKS", 1, [...relation.links]),
     ...(uniques.length > 0 ? [classVariable("UNIQUES", 2, uniques)] : []),
-    ...relation.links.map((link) => optionalField(link, union(declarers(objects, relation, link).map((o) => o.name)))),
+    ...relation.links.map((link) => {
+      const declaring = declarers(objects, relation, link).filter((o) => itself(o).length === 0).map((o) => o.name);
+      return optionalField(link, union(declaring.length > 0 ? declaring : ["Any"]));
+    }),
     ...[...relation.properties].map(([named, property]) => optionalField(named, annotation(property.type), property.description))];
   const built = B.ClassDef().name(relation.name).add_decorator_list((b: any) => b.Call().func((x: any) => name(x, "dataclass"))
     .add_keywords((kw: any) => kw.arg("eq").value((x: any) => x.Constant().spelling("False")))).create();
@@ -527,19 +699,14 @@ export const Entry = new T.Transform("Entry", over({ r: S.OfRelation.Schema as a
 /** Where a union's and an intersection's members are, in their module form and their data. */
 const MEMBERS: Record<string, string> = { union: "branches", intersection: "parts" };
 
-/** Whether a part's type is an object schema whose properties render: inline, or named. */
-function objectRendered(type: E.Writer): unknown {
-  const renders = (o: E.Writer) => o.has("properties").not_().or_(o.get("properties").all("q", rendered(E.variable("q").get("type"))));
-  const named = P.Exists((q) => q.symbols({ x: S.OfObject.Schema }).requires(x.get("name").eq(type.get("named").get("name")))
-    .requires(renders(x)));
-  return E.operation("or", type.has("object").and_(renders(type.get("object"))), E.operation("and", type.has("named"), named));
-}
-
 function variantsRenderable(kind: string, flat: boolean): E.Writer {
   const members = MEMBERS[kind] as string;
   const flatness = flat ? s.has("flat") : s.has("flat").not_();
-  const each = kind === "intersection" && flat ? objectRendered(p.get("type")) : rendered(p.get("type"));
-  return s.has("name").and_(s.has("parameters").not_()).and_(flatness).and_(s.has(members)).and_(s.get(members).all("p", each as never));
+  let whole = built(members, s);
+  if (kind === "intersection" && flat) { // an inline part's properties are the class's own
+    whole = whole.and_(s.get(members).all("p", p.get("type").has("object").not_().or_(built("properties", p.get("type").get("object")))));
+  }
+  return s.has("name").and_(s.has("parameters").not_()).and_(flatness).and_(s.has(members)).and_(whole);
 }
 
 /** The name a flat union's branch has unless its alias says otherwise: its type's, as Python writes it. */
@@ -661,7 +828,7 @@ export const NativeAlias = new T.Transform("NativeAlias", over({ s: S.OfNative.S
   over({ s: S.OfNative.Schema as any }, HAS_ALIAS), { rewrite: renderNamed as never });
 /** A named list as a type alias of `list[T]` or `dict[K, T]` (`type Names = list[str]`), as a proxy reads its value. */
 export const ListAlias = new T.Transform("ListAlias", over({ s: S.OfIndexed.Schema as any }, NAMED.and_(bounded(s)).and_(
-  s.has("key").not_().or_(rendered(s.get("key")))).and_(rendered(s.get("item")))),
+  E.operation("not", Unbuilt.call(s.get("item")) as never)).and_(s.has("key").not_().or_(E.operation("not", Unbuilt.call(s.get("key")) as never)))),
   over({ s: S.OfIndexed.Schema as any }, HAS_ALIAS), { rewrite: renderNamed as never });
 
 // --- Classes to schemas ---
@@ -722,6 +889,7 @@ function typeOf(schemas: Stores.Store, node: any, where: string, module: Py.Modu
     const [held, found] = (node.slice as any).elts;
     return faceted(typeOf(schemas, held, where, module), literal(found)).update();
   }
+  if (head(node) === "Any") throw new ValueError(`${where}: Any is a dropped type, which reading cannot restore`);
   if ((node instanceof Py.Name || node instanceof Py.Attribute) && head(node) !== null) {
     const named = head(node) as string;
     return NATIVES.includes(named) ? S.OfNative.resolve((x) => x.token("basic", named)) : registered(schemas, named, module, where);
@@ -977,6 +1145,7 @@ function readClass(store: Stores.Combined, match: Record<string, unknown>): Map<
       const type = typeOf(schemas, optional(statement.annotation), where, module);
       properties.push((q: any) => withDescription(q.name(fieldName).of(type), description));
     } else {
+      if (relationName === "Any") throw new ValueError(`${where}: Any is a dropped type, which reading cannot restore`);
       const relation = relationOf(schemas, module, relationName, where);
       const me = meOf(module, named, statement, relationName, where);
       adjacencies.push((q: any) => withDescription(q.name(fieldName).of(relation).me(me), description));
@@ -1038,12 +1207,14 @@ export const AliasSchema = new T.Transform("AliasSchema", over({ al: Py.TypeAlia
 export const Schema = new T.Transform("Schema", over({ c: Py.ClassDef.Schema }, DECORATED),
   over({ c: Py.ClassDef.Schema }, HAS_SCHEMA), { rewrite: readClass as never });
 
-export const TO_PYTHON = [Dataclass, Entry, Union, Intersection, Alias, NativeAlias, ListAlias];
+/** The drop transforms: per reason (`DROPS`), one for each kind of schema it applies to, named after the reason. */
+export const DROP = dropTransforms();
+export const TO_PYTHON = [Dataclass, Entry, Union, Intersection, Alias, NativeAlias, ListAlias, ...DROP];
 export const FROM_PYTHON = [Schema, AliasSchema];
-/** Classes that are not frozen, and every relation's entry class. */
+/** Classes that are not frozen, every relation's entry class and every alias, and every drop. */
 export const PLAIN = new T.Policy(new T.Clause("Dataclass", { frozen: false }), new T.Clause("Entry"),
   new T.Clause("Union", { frozen: false }), new T.Clause("Intersection", { frozen: false }), new T.Clause("Alias"),
-  new T.Clause("NativeAlias"), new T.Clause("ListAlias"));
+  new T.Clause("NativeAlias"), new T.Clause("ListAlias"), ...Object.keys(DROPS).map((reason) => new T.Clause(reason)));
 
 /** A session that renders the schemas `schemas` registers, and those they refer to, as the dataclasses of a new module,
  * run to the end: each decision an `earlier` step with its key took (`Dataclass(s=Contact)`) taken again, the others by
@@ -1061,6 +1232,14 @@ export function read(module: Py.Module, schemas: Stores.Store | null = null): T.
   const session = new T.Session(store(schemas ?? new Proxies.OfStore(), module), [...FROM_PYTHON]);
   session.run(new T.Policy(new T.Clause("Schema"), new T.Clause("AliasSchema")));
   return session;
+}
+
+/** What a generation's drop steps dropped, in the order they did: each schema's name, where in it (`""` for the schema
+ * itself, else a property, adjacency, link, branch or part, `name[item]` within a list), the transform that dropped
+ * it, and why (`DROPS`). */
+export function dropped(session: T.Session): [string, string, string, string][] {
+  return (session.store.singleton(OUTPUT) as unknown as Output).dropped.map(([schema, reason, where]) =>
+    [(schema as any).name as string, where, reason, DROPS[reason] as string]);
 }
 
 /** The object schemas, unions, intersections, relations, named natives and named lists of a generation's store that no
