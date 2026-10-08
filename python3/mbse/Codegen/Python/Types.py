@@ -28,7 +28,9 @@ singleton `Codegen.Output` holds the module written or read. Each step is one de
   `KIND` as a union or an intersection, any other as an object schema, registered in the schemas' store; a class of the
   module a dataclass field names before its own step is registered empty, and filled by that step, and a name that is
   neither a class of the module nor a schema of the store is refused. A field's annotation is read as `Dataclass` and `Entry` write one, and any other is refused.
-- `FlatUnion` reads a type alias of the module back as a flat union, a branch per type of `A | B | ...`.
+- `NativeAlias` and `ListAlias` render a named native or list as a type alias of what it holds (`type Word = str`,
+  `type Names = list[Word]`), as a proxy reads its value, and a field names it.
+- `AliasSchema` reads a type alias of the module back: a flat union of `A | B | ...`, a named native, or a named list.
 
 Each step links what it wrote, by role: a `class`, an `alias`, or, reading back, a `schema` (mbse-patterns' `Wrote`).
 `generate(schemas, policy, earlier)` and `read(module, schemas)` run each to the end. `frozen` is the one thing a schema
@@ -51,7 +53,7 @@ from mbse.Programs.Python import Python312, Syntax as Py
 from mbse.Schemas.Framework import Bindings, Proxies, Reflection, Schemas as S, Stores
 
 __all__ = ["OUTPUT", "NATIVES", "KEYWORDS", "Rendered", "Output", "Generated", "store", "Dataclass", "Entry", "Union",
-           "Intersection", "Alias", "Schema", "FlatUnion", "TO_PYTHON",
+           "Intersection", "Alias", "NativeAlias", "ListAlias", "Schema", "AliasSchema", "TO_PYTHON",
            "FROM_PYTHON", "PLAIN", "missing", "problems",
            "generate", "read", "text"]
 
@@ -125,18 +127,25 @@ def _basic(type_: E.Writer) -> E.Writer:
 
 
 def _simple(type_: E.Writer) -> E.Writer:
-    """A basic native, or a named object schema, union or intersection: each a class."""
+    """A basic native, or a named schema of a kind that a class or an alias renders: an object schema, a union, an
+    intersection, a native or a list."""
     named = [P.Exists(lambda q, meta=meta: q.symbols({"x": meta}).requires(x.get("name").eq(type_.get("named").get("name"))))
-             for meta in (S.OfObject.Schema, S.OfUnion.Schema, S.OfIntersection.Schema)]
-    return _basic(type_).or_(E.operation("and", type_.has("named"), E.operation("or", named[0], E.operation(
-        "or", named[1], named[2]))))
+             for meta in (S.OfObject.Schema, S.OfUnion.Schema, S.OfIntersection.Schema, S.OfNative.Schema, S.OfIndexed.Schema)]
+    return _basic(type_).or_(E.operation("and", type_.has("named"), functools.reduce(
+        lambda either, other: E.operation("or", either, other), named)))
+
+
+def _key(type_: E.Writer) -> E.Writer:
+    """Whether a list's key renders: a basic native, or a named one, whose alias names it."""
+    named = P.Exists(lambda q: q.symbols({"x": S.OfNative.Schema}).requires(x.get("name").eq(type_.get("named").get("name"))))
+    return _basic(type_).or_(E.operation("and", type_.has("named"), named))
 
 
 Rendered = P.OfPredicate.Builder().name("Codegen.Rendered").parameters(lambda q: q.name("t")).create()
 """Whether `Dataclass` renders a type `t`: a simple one, or a list without an extent of one it renders, positional or
-keyed by a basic native, nested to any depth. It applies itself to the list's item."""
+keyed by a native, basic or named, nested to any depth. It applies itself to the list's item."""
 P.OfPredicate.Builder(Rendered).requires(_simple(t).or_(t.has("indexed").and_(t.get("indexed").has("extent").not_()).and_(
-    t.get("indexed").has("key").not_().or_(_basic(t.get("indexed").get("key")))).and_(
+    t.get("indexed").has("key").not_().or_(_key(t.get("indexed").get("key")))).and_(
     Rendered(t.get("indexed").get("item"))))).update()
 
 
@@ -178,13 +187,18 @@ def _name(builder: Any, spelling: str) -> Any:
 
 
 def _annotation(type_: Any) -> Any:
-    """The annotation of a type `Dataclass` renders."""
+    """The annotation of a type `Dataclass` renders: a named schema by its name."""
+    return (lambda b: _name(b, type_.name)) if type_.name is not None else _structure_annotation(type_)
+
+
+def _structure_annotation(type_: Any) -> Any:
+    """The annotation of what a type holds, its name aside: a native's, or a list's of its items."""
     if isinstance(type_, S.OfIndexed.Data) and type_.key is not None:
         return lambda b: b.Subscript().value(lambda x: _name(x, "dict")).slice(
             lambda x: x.Tuple().add_elts(_annotation(type_.key)).add_elts(_annotation(type_.item)))
     if isinstance(type_, S.OfIndexed.Data):
         return lambda b: b.Subscript().value(lambda x: _name(x, "list")).slice(_annotation(type_.item))
-    return lambda b: _name(b, type_.token.name if type_.name is None else type_.name)
+    return lambda b: _name(b, type_.token.name)
 
 
 def _field(name: str) -> str:
@@ -388,9 +402,11 @@ def _variants_renderable(kind: str, flat: bool) -> Any:
 
 def _convention(type_: Any) -> str:
     """The name a flat union's branch has unless its alias says otherwise: its type's, as Python writes it."""
+    if type_.name is not None:
+        return _snake(type_.name)
     if isinstance(type_, S.OfIndexed.Data):
         return "list" if type_.key is None else "dict"
-    return type_.token.name if type_.name is None else _snake(type_.name)
+    return type_.token.name
 
 
 def _snake(name: str) -> str:
@@ -488,6 +504,32 @@ Alias = T.Transform("Alias", _over({"s": S.OfUnion.Schema}, _variants_renderable
                     _over({"s": S.OfUnion.Schema}, _HAS_ALIAS), rewrite=_render_alias)
 """A flat union as a type alias of its branches' types (`type Channel = Call | Mail`), as a proxy reads its value; its
 branches' names and its description, where it has them, in `Annotated` metadata."""
+
+
+def _render_named(store: Stores.Combined, match: dict[str, Any], arguments: dict[str, Any]) -> dict[str, Any]:
+    """A named native or list as a type alias of what it holds, its description, where it has one, in `Annotated`
+    metadata."""
+    schema = match["s"]
+    held = _structure_annotation(schema)
+    value = held if schema.description is None else lambda b: b.Subscript().value(lambda x: _name(x, "Annotated")).slice(
+        lambda x: x.Tuple().add_elts(held).add_elts(_metadata({"description": schema.description})))
+    module = _module(store)
+    if schema.description is not None:
+        _require(module, "typing", "Annotated")
+    alias = Py.LANGUAGE.Builders.TypeAlias().name(lambda b: b.id(schema.name)).value(value).create()
+    _place(module, alias)
+    return {"alias": alias}
+
+
+_NAMED = s.has("name").and_(s.has("parameters").not_())
+NativeAlias = T.Transform("NativeAlias", _over({"s": S.OfNative.Schema}, _NAMED.and_(s.get("format").eq("basic")).and_(
+    s.has("bits").not_()).and_(s.has("bytes").not_()).and_(s.has("terms").not_())),
+    _over({"s": S.OfNative.Schema}, _HAS_ALIAS), rewrite=_render_named)
+"""A named basic native as a type alias of Python's type for it (`type Word = str`), as a proxy reads its value."""
+ListAlias = T.Transform("ListAlias", _over({"s": S.OfIndexed.Schema}, _NAMED.and_(s.has("extent").not_()).and_(
+    s.has("key").not_().or_(_key(s.get("key")))).and_(_rendered(s.get("item")))),
+    _over({"s": S.OfIndexed.Schema}, _HAS_ALIAS), rewrite=_render_named)
+"""A named list as a type alias of `list[T]` or `dict[K, T]` (`type Names = list[str]`), as a proxy reads its value."""
 """A named intersection as a class of a field per part, as a proxy's intersection value reads it, its class variable
 `KIND` `"intersection"`."""
 
@@ -569,11 +611,48 @@ def _named(schemas: Stores.Store, name: str, module: Py.Module, where: str = "")
         if cls is None:
             raise ValueError(f"{where}: {name} is not a class of the module or a schema of the store")
         if isinstance(cls, Py.TypeAlias):
-            schemas.register(S.OfUnion.Builder().name(name).flat().create())
-            return schemas.registered(name)
+            return _alias_schema(schemas, module, name, cls)
         kind = _class_variables(cls).get("KIND")
         builder = {"union": S.OfUnion.Builder, "intersection": S.OfIntersection.Builder}.get(kind, S.OfObject.Builder)
         schemas.register(builder().name(name).create())
+    return schemas.registered(name)
+
+
+def _aliased(alias: Any) -> tuple[Any, dict[str, Any]]:
+    """What a type alias holds, and its `Annotated` metadata."""
+    value = alias.value
+    if isinstance(value, Py.Subscript) and isinstance(value.value, Py.Name) and _spelling(value.value) == "Annotated":
+        return value.slice.elts[0], _literal(value.slice.elts[1])
+    return value, {}
+
+
+_READING: set[str] = set()
+"""The named lists being read, so that one that holds itself through aliases alone is refused."""
+
+
+def _alias_schema(schemas: Stores.Store, module: Py.Module, name: str, alias: Any) -> Any:
+    """The schema a type alias's value says, registered as `name`: of `A | B`, a flat union, registered empty and filled
+    when its alias is read, since its branches may name classes not read yet; of a native's name, a named native, and of
+    `list[...]` or `dict[...]`, a named list, each read in full now, with its description. Anything else is refused."""
+    value, metadata = _aliased(alias)
+    if isinstance(value, Py.BinOp) and value.op == "|":
+        schemas.register(S.OfUnion.Builder().name(name).flat().create())
+        return schemas.registered(name)
+    native = isinstance(value, Py.Name) and _spelling(value) in NATIVES
+    if not native and not (isinstance(value, Py.Subscript) and isinstance(value.value, Py.Name)
+                           and _spelling(value.value) in ("list", "dict")):
+        raise ValueError(f"{name}: cannot read the alias of {Python312.print(value).strip()}")
+    if name in _READING:
+        raise ValueError(f"{name}: a list that holds itself through aliases alone has no Python form")
+    _READING.add(name)
+    try:
+        held = _type(schemas, value, name, module)
+    finally:
+        _READING.discard(name)
+    builder = (S.OfNative.Builder().name(name).token(held.token.format, held.token.name) if native
+               else S.OfIndexed.Builder().name(name).of(held.item))
+    builder = builder.key(held.key) if not native and held.key is not None else builder
+    schemas.register(_described(builder, metadata.get("description")).create())
     return schemas.registered(name)
 
 
@@ -787,16 +866,17 @@ def _named_convention(node: Any) -> str:
 
 
 def _read_alias(store: Stores.Combined, match: dict[str, Any], arguments: dict[str, Any]) -> dict[str, Any]:
+    """Reads a type alias back as the schema its value says (see `_alias_schema`); what the step wrote: the schema."""
     alias = match["al"]
     schemas, module, name = _schemas(store), _module(store), alias.name.id.spelling
-    value, metadata = alias.value, {}
-    if isinstance(value, Py.Subscript) and isinstance(value.value, Py.Name) and _spelling(value.value) == "Annotated":
-        value, held = value.slice.elts
-        metadata = _literal(held)
+    value, metadata = _aliased(alias)
+    schema = _named(schemas, name, module)
+    if not isinstance(schema, S.OfUnion.Data):  # a native or a list, read in full when it was first named
+        return {"schema": schema}
     nodes = _branches(value)
     names = metadata.get("branches", [_named_convention(node) for node in nodes])
     described = metadata.get("descriptions", {})
-    builder = S.OfUnion.Builder(_named(schemas, name, module)).branches(
+    builder = S.OfUnion.Builder(schema).branches(
         *[lambda q, f=f, node=node: _described(q.name(f).of(_type(schemas, node, f"{name}.{f}", module)), described.get(f))
           for f, node in zip(names, nodes)]).flat()
     if "description" in metadata:
@@ -804,22 +884,27 @@ def _read_alias(store: Stores.Combined, match: dict[str, Any], arguments: dict[s
     return {"schema": builder.update()}
 
 
-_ALIASED = P.Exists(lambda q: q.symbols({"t": S.OfUnion.Schema, "nm": Py.Name.Schema}).requires(
-    P.Contains(al.children, lambda e: e.property == "name" and e.child == nm)).requires(
-    P.Contains(nm.children, lambda e: e.property == "id" and e.child.spelling == t.name)).requires(t.has("branches")))
-FlatUnion = T.Transform("FlatUnion", _over({"al": Py.TypeAlias.Schema}, al.has("kind")),
-                        _over({"al": Py.TypeAlias.Schema}, _ALIASED), rewrite=_read_alias)
-"""A type alias of the module as a flat union: a branch per type of `A | B | ...`, named after it, or as its
-`Annotated` metadata says."""
+_ALIASED = functools.reduce(lambda either, other: E.operation("or", either, other), [
+    P.Exists(lambda q, meta=meta, filled=filled: q.symbols({"t": meta, "nm": Py.Name.Schema}).requires(
+        P.Contains(al.children, lambda e: e.property == "name" and e.child == nm)).requires(
+        P.Contains(nm.children, lambda e: e.property == "id" and e.child.spelling == t.name)).requires(t.has(filled)))
+    for meta, filled in ((S.OfUnion.Schema, "branches"), (S.OfNative.Schema, "token"), (S.OfIndexed.Schema, "item"))])
+"""Whether a schema named after the alias `al` has been read: a union with branches, a native with a token, or a list
+with an item."""
+AliasSchema = T.Transform("AliasSchema", _over({"al": Py.TypeAlias.Schema}, al.has("kind")),
+                          _over({"al": Py.TypeAlias.Schema}, _ALIASED), rewrite=_read_alias)
+"""A type alias of the module as a schema: of `A | B | ...`, a flat union, a branch per type, named after it or as its
+`Annotated` metadata says; of a native's name, a named native; of `list[...]` or `dict[...]`, a named list; its
+description, where it has one, from its `Annotated` metadata."""
 
 Schema = T.Transform("Schema", _over({"c": Py.ClassDef.Schema}, _DECORATED),
                      _over({"c": Py.ClassDef.Schema}, _HAS_SCHEMA), rewrite=_read_class)
 """A dataclass of the module as an object schema, or an entry class (with `LINKS`) as a relation."""
 
-TO_PYTHON = (Dataclass, Entry, Union, Intersection, Alias)
-FROM_PYTHON = (Schema, FlatUnion)
+TO_PYTHON = (Dataclass, Entry, Union, Intersection, Alias, NativeAlias, ListAlias)
+FROM_PYTHON = (Schema, AliasSchema)
 PLAIN = T.Policy(T.Clause("Dataclass", {"frozen": False}), T.Clause("Entry"), T.Clause("Union", {"frozen": False}),
-                 T.Clause("Intersection", {"frozen": False}), T.Clause("Alias"))
+                 T.Clause("Intersection", {"frozen": False}), T.Clause("Alias"), T.Clause("NativeAlias"), T.Clause("ListAlias"))
 """Classes that are not frozen, and every relation's entry class."""
 
 
@@ -838,16 +923,17 @@ def read(module: Py.Module, schemas: Stores.Store | None = None) -> T.Session:
     """A session that reads the dataclasses of `module` as schemas registered in `schemas` (a new store if none), run to
     the end."""
     session = T.Session(store(Proxies.OfStore() if schemas is None else schemas, module), list(FROM_PYTHON))
-    session.run(T.Policy(T.Clause("Schema"), T.Clause("FlatUnion")))
+    session.run(T.Policy(T.Clause("Schema"), T.Clause("AliasSchema")))
     return session
 
 
 def missing(session: T.Session) -> list[Any]:
-    """The object schemas, unions, intersections and relations of a generation's store that no class renders, each kind
-    in name order: those `Dataclass`, `Union`, `Intersection` or `Entry` does not render (see their befores), whose names
-    a field may still name (completeness, which mbse-patterns plans in general)."""
+    """The object schemas, unions, intersections, relations, named natives and named lists of a generation's store that no
+    class or alias renders, each kind in name order: those no transform renders (see their befores), whose names a field
+    may still name (completeness, which mbse-patterns plans in general)."""
     classes = {_defined(statement) for statement in _module(session.store).body}
-    return [schema for kind in ("Schemas.Object", "Schemas.Union", "Schemas.Intersection", "Schemas.Relation")
+    return [schema for kind in ("Schemas.Object", "Schemas.Union", "Schemas.Intersection", "Schemas.Relation",
+                                "Schemas.Native", "Schemas.Indexed")
             for schema in session.store.extent(kind) if schema.name not in classes]
 
 

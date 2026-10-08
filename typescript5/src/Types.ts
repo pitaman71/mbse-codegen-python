@@ -29,7 +29,9 @@
  *   `KIND` as a union or an intersection, any other as an object schema, registered in the schemas' store; a class of
  *   the module a dataclass field names before its own step is registered empty, and filled by that step, and a name
  *   that is neither a class of the module nor a schema of the store is refused. A field's annotation is read as `Dataclass` and `Entry` write one, and any other is refused.
- * - `FlatUnion` reads a type alias of the module back as a flat union, a branch per type of `A | B | ...`.
+ * - `NativeAlias` and `ListAlias` render a named native or list as a type alias of what it holds (`type Word = str`,
+ *   `type Names = list[Word]`), as a proxy reads its value, and a field names it.
+ * - `AliasSchema` reads a type alias of the module back: a flat union of `A | B | ...`, a named native, or a named list.
  *
  * Each step links what it wrote, by role: a `class`, an `alias`, or, reading back, a `schema` (mbse-patterns' `Wrote`).
  * `generate(schemas, policy, earlier)` and `read(module, schemas)` run each to the end. `frozen` is the one thing a
@@ -118,18 +120,26 @@ function basic(type: E.Writer): E.Writer {
     native.has("terms").not_()).and_(native.has("parameters").not_()).and_(native.has("description").not_());
 }
 
-/** A basic native, or a named object schema, union or intersection: each a class. */
+/** A basic native, or a named schema of a kind that a class or an alias renders: an object schema, a union, an
+ * intersection, a native or a list. */
 function simple(type: E.Writer): E.Writer {
-  const [objects, unions, intersections] = [S.OfObject.Schema, S.OfUnion.Schema, S.OfIntersection.Schema].map((meta: any) =>
-    P.Exists((q) => q.symbols({ x: meta }).requires(x.get("name").eq(type.get("named").get("name"))))) as [never, never, never];
-  return basic(type).or_(E.operation("and", type.has("named"), E.operation("or", objects, E.operation("or", unions, intersections))));
+  const named = [S.OfObject.Schema, S.OfUnion.Schema, S.OfIntersection.Schema, S.OfNative.Schema, S.OfIndexed.Schema].map((meta: any) =>
+    P.Exists((q) => q.symbols({ x: meta }).requires(x.get("name").eq(type.get("named").get("name"))))) as unknown[];
+  return basic(type).or_(E.operation("and", type.has("named"),
+    named.reduce((either, other) => E.operation("or", either as never, other as never)) as never));
+}
+
+/** Whether a list's key renders: a basic native, or a named one, whose alias names it. */
+function keyRenders(type: E.Writer): E.Writer {
+  const named = P.Exists((q) => q.symbols({ x: S.OfNative.Schema }).requires(x.get("name").eq(type.get("named").get("name"))));
+  return basic(type).or_(E.operation("and", type.has("named"), named as never));
 }
 
 /** Whether `Dataclass` renders a type `t`: a simple one, or a list without an extent of one it renders, positional or
- * keyed by a basic native, nested to any depth. It applies itself to the list's item. */
+ * keyed by a native, basic or named, nested to any depth. It applies itself to the list's item. */
 export const Rendered = new P.OfPredicate.Builder().name("Codegen.Rendered").parameters((q) => q.name("t")).create();
 new P.OfPredicate.Builder(Rendered).requires(simple(t).or_(t.has("indexed").and_(t.get("indexed").has("extent").not_()).and_(
-  t.get("indexed").has("key").not_().or_(basic(t.get("indexed").get("key")))).and_(
+  t.get("indexed").has("key").not_().or_(keyRenders(t.get("indexed").get("key")))).and_(
   Rendered.call(t.get("indexed").get("item")) as never))).update();
 
 /** Whether `Dataclass` renders the type: `Rendered` applied to it. */
@@ -169,6 +179,11 @@ function name(builder: any, spelling: string): any {
 
 /** The annotation of a type `Dataclass` renders. */
 function annotation(type: any): (b: any) => any {
+  return type.name !== null ? (b) => name(b, type.name) : structureAnnotation(type);
+}
+
+/** The annotation of what a type holds, its name aside: a native's, or a list's of its items. */
+function structureAnnotation(type: any): (b: any) => any {
   if (type instanceof S.OfIndexed.Data && type.key !== null) {
     return (b) => b.Subscript().value((x: any) => name(x, "dict")).slice(
       (x: any) => x.Tuple().add_elts(annotation(type.key)).add_elts(annotation(type.item)));
@@ -176,7 +191,7 @@ function annotation(type: any): (b: any) => any {
   if (type instanceof S.OfIndexed.Data) {
     return (b) => b.Subscript().value((x: any) => name(x, "list")).slice(annotation(type.item));
   }
-  return (b) => name(b, type.name === null ? type.token.name : type.name);
+  return (b) => name(b, type.token.name);
 }
 
 /** A property's name as a field's: a keyword with a trailing underscore. */
@@ -376,8 +391,9 @@ function variantsRenderable(kind: string, flat: boolean): E.Writer {
 
 /** The name a flat union's branch has unless its alias says otherwise: its type's, as Python writes it. */
 function convention(type: any): string {
+  if (type.name !== null) return snakeCase(type.name);
   if (type instanceof S.OfIndexed.Data) return type.key === null ? "list" : "dict";
-  return type.name === null ? type.token.name : snakeCase(type.name);
+  return type.token.name;
 }
 
 function snakeCase(named: string): string {
@@ -475,6 +491,30 @@ const HAS_ALIAS = P.Exists((q) => q.symbols({ al: Py.TypeAlias.Schema, nm: Py.Na
 export const Alias = new T.Transform("Alias", over({ s: S.OfUnion.Schema }, variantsRenderable("union", true)),
   over({ s: S.OfUnion.Schema }, HAS_ALIAS), { rewrite: renderAlias as never });
 
+/** A named native or list as a type alias of what it holds, its description, where it has one, in `Annotated`
+ * metadata. */
+function renderNamed(store: Stores.Combined, match: Record<string, unknown>): Map<string, unknown> {
+  const schema = match["s"] as any;
+  const held = structureAnnotation(schema);
+  const value = schema.description === null ? held : (b: any) => b.Subscript().value((x: any) => name(x, "Annotated")).slice(
+    (x: any) => x.Tuple().add_elts(held).add_elts(metadataLiteral({ description: schema.description })));
+  const module = moduleOf(store);
+  if (schema.description !== null) require(module, "typing", "Annotated");
+  const alias = (Py.LANGUAGE.Builders as any).TypeAlias().name((b: any) => b.id(schema.name)).value(value).create();
+  place(module, alias);
+  return new Map([["alias", alias]]);
+}
+
+const NAMED = s.has("name").and_(s.has("parameters").not_());
+/** A named basic native as a type alias of Python's type for it (`type Word = str`), as a proxy reads its value. */
+export const NativeAlias = new T.Transform("NativeAlias", over({ s: S.OfNative.Schema as any }, NAMED.and_(s.get("format").eq("basic")).and_(
+  s.has("bits").not_()).and_(s.has("bytes").not_()).and_(s.has("terms").not_())),
+  over({ s: S.OfNative.Schema as any }, HAS_ALIAS), { rewrite: renderNamed as never });
+/** A named list as a type alias of `list[T]` or `dict[K, T]` (`type Names = list[str]`), as a proxy reads its value. */
+export const ListAlias = new T.Transform("ListAlias", over({ s: S.OfIndexed.Schema as any }, NAMED.and_(s.has("extent").not_()).and_(
+  s.has("key").not_().or_(keyRenders(s.get("key")))).and_(rendered(s.get("item")))),
+  over({ s: S.OfIndexed.Schema as any }, HAS_ALIAS), { rewrite: renderNamed as never });
+
 // --- Classes to schemas ---
 
 const NAMED_DATACLASS = P.Contains(n.children, (e) => e.property.eq("id").and_(e.child.spelling.eq("dataclass")));
@@ -548,15 +588,52 @@ function registered(schemas: Stores.Store, named: string, module: Py.Module, whe
   if (![...schemas.names()].includes(named)) {
     const cls = module.body.find((statement: any) => defined(statement) === named);
     if (cls === undefined) throw new ValueError(`${where}: ${named} is not a class of the module or a schema of the store`);
-    if (cls instanceof Py.TypeAlias) {
-      (schemas as any).register(new S.OfUnion.Builder().name(named).flat().create());
-      return schemas.registered(named);
-    }
+    if (cls instanceof Py.TypeAlias) return aliasSchema(schemas, module, named, cls);
     const kind = classVariables(cls).get("KIND");
     const made = kind === "union" ? new S.OfUnion.Builder().name(named).create() : kind === "intersection"
       ? new S.OfIntersection.Builder().name(named).create() : new S.OfObject.Builder().name(named).create();
     (schemas as any).register(made);
   }
+  return schemas.registered(named);
+}
+
+/** What a type alias holds, and its `Annotated` metadata. */
+function aliased(alias: any): [any, Record<string, any>] {
+  const value = alias.value;
+  if (value instanceof Py.Subscript && value.value instanceof Py.Name && spelling(value.value) === "Annotated") {
+    return [(value.slice as any).elts[0], literal((value.slice as any).elts[1])];
+  }
+  return [value, {}];
+}
+
+/** The named lists being read, so that one that holds itself through aliases alone is refused. */
+const READING = new Set<string>();
+
+/** The schema a type alias's value says, registered as `name`: of `A | B`, a flat union, registered empty and filled
+ * when its alias is read, since its branches may name classes not read yet; of a native's name, a named native, and of
+ * `list[...]` or `dict[...]`, a named list, each read in full now, with its description. Anything else is refused. */
+function aliasSchema(schemas: Stores.Store, module: Py.Module, named: string, alias: any): any {
+  const [value, metadata] = aliased(alias);
+  if (value instanceof Py.BinOp && value.op === "|") {
+    (schemas as any).register(new S.OfUnion.Builder().name(named).flat().create());
+    return schemas.registered(named);
+  }
+  const native = value instanceof Py.Name && NATIVES.includes(spelling(value));
+  if (!native && !(value instanceof Py.Subscript && value.value instanceof Py.Name && ["list", "dict"].includes(spelling(value.value)))) {
+    throw new ValueError(`${named}: cannot read the alias of ${Python312.print(value).trim()}`);
+  }
+  if (READING.has(named)) throw new ValueError(`${named}: a list that holds itself through aliases alone has no Python form`);
+  READING.add(named);
+  let held: any;
+  try {
+    held = typeOf(schemas, value, named, module);
+  } finally {
+    READING.delete(named);
+  }
+  let builder: any = native ? new S.OfNative.Builder().name(named).token(held.token.format, held.token.name)
+    : new S.OfIndexed.Builder().name(named).of(held.item);
+  if (!native && held.key !== null) builder = builder.key(held.key);
+  (schemas as any).register(withDescription(builder, metadata["description"]).create());
   return schemas.registered(named);
 }
 
@@ -749,16 +826,13 @@ function namedConvention(node: any): string {
 function readAlias(store: Stores.Combined, match: Record<string, unknown>): Map<string, unknown> {
   const alias = match["al"] as any;
   const [schemas, module, named] = [schemasOf(store), moduleOf(store), alias.name.id.spelling as string];
-  let [value, metadata]: [any, Record<string, any>] = [alias.value, {}];
-  if (value instanceof Py.Subscript && value.value instanceof Py.Name && spelling(value.value) === "Annotated") {
-    const [union, held] = (value.slice as any).elts;
-    value = union;
-    metadata = literal(held);
-  }
+  const [value, metadata] = aliased(alias);
+  const schema = registered(schemas, named, module);
+  if (!(schema instanceof S.OfUnion.Data)) return new Map([["schema", schema]]); // a native or a list, read in full when it was first named
   const nodes = branchesOf(value);
   const names: string[] = metadata["branches"] ?? nodes.map(namedConvention);
   const notes: Record<string, string> = metadata["descriptions"] ?? {};
-  let builder: any = new S.OfUnion.Builder(registered(schemas, named, module)).branches(...nodes.map((node, i) => {
+  let builder: any = new S.OfUnion.Builder(schema).branches(...nodes.map((node, i) => {
     const type = typeOf(schemas, node, `${named}.${names[i]}`, module);
     return (q: any) => withDescription(q.name(names[i]).of(type), notes[names[i] as string]);
   })).flat();
@@ -766,23 +840,29 @@ function readAlias(store: Stores.Combined, match: Record<string, unknown>): Map<
   return new Map([["schema", builder.update()]]);
 }
 
-const ALIASED = P.Exists((q) => q.symbols({ t: S.OfUnion.Schema, nm: Py.Name.Schema }).requires(
-  P.Contains(al.children, (e) => e.property.eq("name").and_(e.child.eq(nm)))).requires(
-  P.Contains(nm.children, (e) => e.property.eq("id").and_(e.child.spelling.eq(t.name)))).requires(t.has("branches")));
-/** A type alias of the module as a flat union: a branch per type of `A | B | ...`, named after it, or as its
- * `Annotated` metadata says. */
-export const FlatUnion = new T.Transform("FlatUnion", over({ al: Py.TypeAlias.Schema }, al.has("kind")),
+/** Whether a schema named after the alias `al` has been read: a union with branches, a native with a token, or a list
+ * with an item. */
+const ALIASED = ([[S.OfUnion.Schema, "branches"], [S.OfNative.Schema, "token"], [S.OfIndexed.Schema, "item"]] as [any, string][]).map(
+  ([meta, filled]) => P.Exists((q) => q.symbols({ t: meta, nm: Py.Name.Schema }).requires(
+    P.Contains(al.children, (e) => e.property.eq("name").and_(e.child.eq(nm)))).requires(
+    P.Contains(nm.children, (e) => e.property.eq("id").and_(e.child.spelling.eq(t.name)))).requires(t.has(filled))) as unknown)
+  .reduce((either, other) => E.operation("or", either as never, other as never));
+/** A type alias of the module as a schema: of `A | B | ...`, a flat union, a branch per type, named after it or as its
+ * `Annotated` metadata says; of a native's name, a named native; of `list[...]` or `dict[...]`, a named list; its
+ * description, where it has one, from its `Annotated` metadata. */
+export const AliasSchema = new T.Transform("AliasSchema", over({ al: Py.TypeAlias.Schema }, al.has("kind")),
   over({ al: Py.TypeAlias.Schema }, ALIASED), { rewrite: readAlias as never });
 
 /** A dataclass of the module as an object schema, or an entry class (with `LINKS`) as a relation. */
 export const Schema = new T.Transform("Schema", over({ c: Py.ClassDef.Schema }, DECORATED),
   over({ c: Py.ClassDef.Schema }, HAS_SCHEMA), { rewrite: readClass as never });
 
-export const TO_PYTHON = [Dataclass, Entry, Union, Intersection, Alias];
-export const FROM_PYTHON = [Schema, FlatUnion];
+export const TO_PYTHON = [Dataclass, Entry, Union, Intersection, Alias, NativeAlias, ListAlias];
+export const FROM_PYTHON = [Schema, AliasSchema];
 /** Classes that are not frozen, and every relation's entry class. */
 export const PLAIN = new T.Policy(new T.Clause("Dataclass", { frozen: false }), new T.Clause("Entry"),
-  new T.Clause("Union", { frozen: false }), new T.Clause("Intersection", { frozen: false }), new T.Clause("Alias"));
+  new T.Clause("Union", { frozen: false }), new T.Clause("Intersection", { frozen: false }), new T.Clause("Alias"),
+  new T.Clause("NativeAlias"), new T.Clause("ListAlias"));
 
 /** A session that renders the schemas `schemas` registers, and those they refer to, as the dataclasses of a new module,
  * run to the end: each decision an `earlier` step with its key took (`Dataclass(s=Contact)`) taken again, the others by
@@ -798,16 +878,16 @@ export function generate(schemas: Stores.Store, policy: T.Policy = PLAIN, earlie
  * the end. */
 export function read(module: Py.Module, schemas: Stores.Store | null = null): T.Session {
   const session = new T.Session(store(schemas ?? new Proxies.OfStore(), module), [...FROM_PYTHON]);
-  session.run(new T.Policy(new T.Clause("Schema"), new T.Clause("FlatUnion")));
+  session.run(new T.Policy(new T.Clause("Schema"), new T.Clause("AliasSchema")));
   return session;
 }
 
-/** The object schemas, then the relations, of a generation's store that no class renders, each in name order: those
- * `Dataclass` or `Entry` does not render (see their befores), whose names a field may still name (completeness, which
- * mbse-patterns plans in general). */
+/** The object schemas, unions, intersections, relations, named natives and named lists of a generation's store that no
+ * class or alias renders, each kind in name order: those no transform renders (see their befores), whose names a field
+ * may still name (completeness, which mbse-patterns plans in general). */
 export function missing(session: T.Session): any[] {
   const classes = new Set(moduleOf(session.store as Stores.Combined).body.map(defined));
-  return ["Schemas.Object", "Schemas.Union", "Schemas.Intersection", "Schemas.Relation"].flatMap((kind) => [...session.store.extent(kind)])
+  return ["Schemas.Object", "Schemas.Union", "Schemas.Intersection", "Schemas.Relation", "Schemas.Native", "Schemas.Indexed"].flatMap((kind) => [...session.store.extent(kind)])
     .filter((schema: any) => !classes.has(schema.name));
 }
 

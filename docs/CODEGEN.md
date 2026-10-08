@@ -41,7 +41,9 @@ requires.
 | `Alias` | `s`: `Schemas.OfUnion.Schema` | `s` is named, `flat`, declares no parameters, has branches, and every branch's type renders | the module has a type alias named after `s` | none |
 | `Entry` | `r`: `Schemas.OfRelation.Schema` | `r` is named, declares no parameters, every property's type renders, and every link is declared by an object schema | the module has a class named after `r` | none |
 | `Schema` | `c`: `Programs.Python.ClassDef` | `c` is decorated `@dataclass` or `@dataclass(...)` | a relation named after `c` has its links, or an object schema named after `c` has a property or adjacency per field, is `ref` where `c` is `eq=False`, and is described where `c` has a docstring | none |
-| `FlatUnion` | `al`: `Programs.Python.TypeAlias` | always | a union named after `al` has branches | none |
+| `NativeAlias` | `s`: `Schemas.OfNative.Schema` | `s` is named, declares no parameters, and is a basic native without a width | the module has a type alias named after `s` | none |
+| `ListAlias` | `s`: `Schemas.OfIndexed.Schema` | `s` is named, declares no parameters and no extent, its key (if any) is a native, basic or named, and its item renders | the module has a type alias named after `s` | none |
+| `AliasSchema` | `al`: `Programs.Python.TypeAlias` | always | a schema named after `al` has been read: a union with branches, a native with a token, or a list with an item | none |
 
 - **A class is one step**, with all its fields: its one decision is `frozen`, and the fields follow from the schema.
   A symbol binds a schema, never a property: a property is a value within a schema, read with `get`, quantified over
@@ -49,11 +51,17 @@ requires.
   there is one to take, will be a parameter of the schema's step.
 - **What renders**: a basic native as Python's name for it (`str`, `int`, `float`, `bool`, `bytes`), without a width
   or a description of its own, which Python's type cannot hold, a named
-  object schema, union or intersection by its name, a positional list as `list[...]` and a list keyed by a basic
-  native as `dict[K, V]`, of any of these, nested to any depth: `Types.Rendered` is a predicate that applies itself to a
-  list's item (mbse-patterns 0.8.2). A list with an extent has no Python form
-  yet, and a named native or application no class: a schema with such a property has no candidate, rather than a
-  dataclass field that names nothing.
+  object schema, union, intersection, native or list by its name, a positional list as `list[...]` and a list keyed by
+  a native, basic or named, as `dict[K, V]`, of any of these, nested to any depth: `Types.Rendered` is a predicate that
+  applies itself to a list's item (mbse-patterns 0.8.2). An inline list with an extent has no Python form yet, and an
+  application none: a schema with such a property has no candidate, rather than a dataclass field that names nothing.
+- **A named native or list is a type alias** (0.10) of what it holds, as a proxy reads its value: `type Word = str`,
+  `type Names = list[Word]`, `type Tally = dict[Word, Count]`, its description in `Annotated` metadata, as a flat
+  union's is. A field names it (`word: Word | None = None`); one without an alias (another format's native, a bounded
+  list) is in `missing`. Reading back tells aliases apart by what they hold (`AliasSchema`, which replaces 0.8's
+  `FlatUnion`): `A | B` a flat union, a native's name a named native, `list[...]` or `dict[...]` a named list. A named
+  native or list a field names is read in full by that class's step, so its own alias's step has nothing left to do;
+  that step does not link it (a rewrite returns one element per role), an open question below.
 - **Names are written as the schemas have them**, so that a step can still configure them; a name Python cannot spell
   (not an identifier, or a keyword) is a problem of the module, which mbse-programs' validation reports by path
   (`Types.problems(session)`), and taking the source (`Types.text(session)`) with any left is a `ValueError` listing
@@ -125,8 +133,9 @@ requires.
 - **Entries as a sorted set.** Any iterable holds entries; a set sorted by a comparator would serve retrieval.
 - **The older adapter.** mbse-schemas' `Adapters/Dataclasses.py` maps containers of dataclasses to relations, as
   0.5 did and 0.6 no longer does; its classes do not read as proxies. Retire it, or bring it to entry classes.
-- **Named natives and other formats.** A named native (`Word`) has no class: a `NewType`, or a type alias, is one
-  more transform. Natives of other formats (`ccpp`) and widths (bits, bytes) have no Python form yet.
+- **Other formats and widths.** Natives of other formats (`ccpp`) and widths (bits, bytes) have no Python form yet.
+- **Several elements in one role.** A class's step reads the native and list aliases its fields name, which a rewrite
+  cannot yet return as written (one element per role): mbse-patterns could let a role hold several.
 - **Extents.** A bounded list (`.extent(0, 9)`) could be `Annotated[list[T], ...]` with a marker, or a check in
   `__post_init__` with the constraints (`Codegen/Patterns`).
 - **Configuring names.** A name Python cannot spell is an error when the source is taken; a transform that offers a
@@ -134,6 +143,9 @@ requires.
   within the session, recorded in the trace.
 
 ## Resolved
+
+- A named native is a type alias, not a `NewType` (0.10): a `NewType` cannot hold the `Annotated` metadata that
+  carries a description or a width, and a proxy's value is the plain host value either way.
 
 - Descriptions are field metadata (0.9.1), not comments or `Annotated` annotations: metadata reaches code at run
   time (`dataclasses.fields`), as an adjacency's `"me"` already did, and leaves the annotation the type alone.

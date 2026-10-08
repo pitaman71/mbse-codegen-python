@@ -46,7 +46,7 @@ not report it, and reading back did not restore it. 0.9.1 writes and reads each,
 | Native of another format (`ccpp` `int32_t`, `typescript5` `number`) | a basic Python type, the token kept in metadata: `Annotated[int, {"native": ["ccpp", "int32_t"]}]` | `host`: which basic type. A policy may hold a table of them | feasible |
 | Width in bits or bytes, an int | metadata: `Annotated[int, {"bits": 32}]` | none | feasible: no class today (was lost until 0.9.1) |
 | Width as a term | the term, rendered by `Codegen/Expressions` | | waits on Codegen/Expressions |
-| Named native (`Word`) | `type Word = str`, its description in `Annotated` metadata | `form`: a type alias, or `NewType("Word", str)`, which code must construct | feasible |
+| Named native (`Word`) | `type Word = str`, its description in `Annotated` metadata | none: a `NewType` was considered, but it cannot hold the `Annotated` metadata, and a proxy's value is the plain `str` anyway | built (0.10) |
 
 ## Objects
 
@@ -92,9 +92,9 @@ not report it, and reading back did not restore it. 0.9.1 writes and reads each,
 | Positional list | `list[T]` | none | built |
 | Keyed by a basic native | `dict[K, V]` | none | built |
 | Keyed by a value object, union or intersection | `dict[K, V]` | none, but K's class must be hashable, so K's step must take `frozen=True`: a constraint between two steps | feasible |
-| Extent with int bounds | `Annotated[list[T], {"extent": [0, 9]}]` | `form`: the annotated list, or `tuple[T, T, T]` where the length is fixed | feasible |
+| Extent with int bounds | `Annotated[list[T], {"extent": [0, 9]}]` | none: a fixed `tuple[T, T, T]` was considered, but an extent bounds a list's keys, not how many items it holds | feasible |
 | Extent with a term | the term, rendered by `Codegen/Expressions` | | waits on Codegen/Expressions |
-| Named list (`Names`) | `type Names = list[str]` | none | feasible |
+| Named list (`Names`) | `type Names = list[str]`, a dict keyed by a named native too | none | built (0.10) |
 | Lists nested to any depth | as above | none | built (0.9): `Types.Rendered` applies itself to the item, replacing `DEPTH`, which unrolled the check four deep |
 
 ## Parametrics
@@ -130,7 +130,7 @@ not report it, and reading back did not restore it. 0.9.1 writes and reads each,
    without a class.
 3. **Target links in the trace** (mbse-patterns 0.9, codegen 0.9.2, done): each step links the elements it matched
    and wrote, by role, as relations whose entries hold their paths.
-4. The deterministic rows without parameters: named natives and lists as aliases, widths, extents with int bounds,
+4. The deterministic rows without parameters: named natives and lists as aliases (0.10, done), widths, extents with int bounds,
    `python3` tokens.
 5. The rows with a parameter: other formats' natives (`host`), inline schemas (`name`), keys of schemas (`frozen`
    coupling), the adjacency `container`, dotted names (`layout`), the rename step.
