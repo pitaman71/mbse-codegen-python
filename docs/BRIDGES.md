@@ -61,7 +61,7 @@ not report it, and reading back did not restore it. 0.9.1 writes and reads each,
 | Property | field `name: T \| None = None` | none | built |
 | Property named by a keyword | `from_`, read back without the underscore | none | built |
 | Property's description | `field(default=None, metadata={"description": ...})`, as an adjacency's `"me"` | none | built (0.9.1) |
-| Adjacency | one field holding its entries: `phones: tuple[Phones, ...] = ()` | `container`: a tuple, a list, or a set sorted by a comparator. Today it is always a tuple | built, without the parameter |
+| Adjacency | as specified (mbse-schemas' FRAMEWORK.md, Resolved, Adjacencies): one field named after it, an Iterable over full entries of the relation's entry class: `phones: tuple[Phones, ...] = ()` | none: any Iterable meets the contract, so there is nothing to choose. A set sorted by a comparator is an open question | built (0.6) |
 | Adjacency's description | in the field's metadata | none | built (0.9.1) |
 | Inline object schema as a property's type | a class nested in its owner (`Contact.Address`) | `name`: Python needs one, by default the property's name in CamelCase | feasible: no candidate today |
 | Anonymous adjacency (the TODO's: participation without storage) | no field. A class variable may list them | | waits on mbse-schemas |
@@ -135,7 +135,7 @@ not report it, and reading back did not restore it. 0.9.1 writes and reads each,
 4. The deterministic rows without parameters: named natives and lists as aliases (0.10, done), widths, natives' own
    descriptions and extents with int bounds (0.11, done), `python3` tokens (0.12, done).
 5. The rows with a parameter: other formats' natives (`host`), inline schemas (`name`), keys of schemas (`frozen`
-   coupling), the adjacency `container`, dotted names (`layout`).
+   coupling), dotted names (`layout`).
 6. Bindings (`bound`).
 7. Value parameters and applications, once their `form` options are chosen.
 8. Rows that wait on other repositories: terms (Codegen/Expressions), type parameters and anonymous adjacencies

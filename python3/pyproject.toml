@@ -4,12 +4,12 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mbse-codegen-python"
-version = "0.12.1"
+version = "0.12.2"
 description = "Schemas as idiomatic Python source and back: mbse-schemas' schemas rendered as dataclasses through mbse-programs' syntax trees, step by step, by mbse-patterns' transforms"
 keywords = ["code generation", "python", "dataclasses", "schemas", "mbse", "transforms"]
 readme = "README.md"
 requires-python = ">=3.11"
-dependencies = ["mbse-schemas>=0.9.0,<0.10", "mbse-expressions>=0.5.3,<0.6", "mbse-patterns>=0.9.0,<0.10",
+dependencies = ["mbse-schemas>=0.9.1,<0.10", "mbse-expressions>=0.5.3,<0.6", "mbse-patterns>=0.9.0,<0.10",
                 "mbse-programs>=0.3.27,<0.4"]
 
 [tool.setuptools.package-data]

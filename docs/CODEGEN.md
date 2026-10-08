@@ -78,9 +78,12 @@ requires.
 - **Completeness is reported**: `Types.missing(session)` lists the object schemas no class renders, in name order, so
   a field naming one of them (a schema renders by naming any object schema) is seen, not silently left undefined.
 - **Objects read alike, whatever implements them.** Generated classes have the members mbse-schemas' proxies have, so
-  that code written against one works on the other without change: a property is a field, and an adjacency one field
-  named after it, holding its entries (`phones: tuple[Phones, ...] = ()`; any iterable would do, and a set sorted by a
-  comparator, which would serve retrieval, is an open question). Both ends of a relation have their field.
+  that code written against one works on the other without change: a property is a field, and an adjacency is as
+  mbse-schemas' FRAMEWORK.md specifies under Resolved (Adjacencies): "adjacencies are always stored in a class under
+  the name of the adjacency and must store an Iterable over full relation entries, such as `Proxies.OfEntry.Data` or
+  generated equivalent." Here the field holds a tuple of the relation's entry class (`phones: tuple[Phones, ...] =
+  ()`), the generated equivalent of `Proxies.OfEntry.Data`; the tuple is one Iterable, not part of the contract, so
+  there is nothing to choose. Both ends of a relation have their field.
 - **A relation is the class of its entries**, named after it (`Entry`): a field per link, typed by the object schemas
   that declare an adjacency via it (`phone: Pager | Phone | None = None`), then one per property, its class variables
   `LINKS` and `UNIQUES` saying which fields are links and what is unique, its docstring its description. An entry is
@@ -161,7 +164,8 @@ requires.
 - One transform per class, not per field: a step is a decision, and a field has none yet.
 - No silent loss (0.3): a property type or an extent `Dataclass` cannot render faithfully makes its schema have no
   candidate, and `missing` reports it.
-- Relations render as entry classes, and adjacencies as fields holding entries, on both ends (0.6), so that generated
+- Relations render as entry classes, and adjacencies as fields holding entries, on both ends (0.6), as specified (see
+  Objects read alike), so that generated
   classes read as mbse-schemas' proxies do (0.8.3) and code works on either without change. It replaces 0.5's
   container fields (the older adapter's mapping), which hid the entries and differed from proxies.
 - Unions and intersections render as value classes of a dataclass field per branch or part (0.7), as proxies read
