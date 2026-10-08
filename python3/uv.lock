@@ -460,7 +460,7 @@ wheels = [
 
 [[package]]
 name = "mbse-codegen-python"
-version = "0.7.0"
+version = "0.8.0"
 source = { editable = "." }
 dependencies = [
     { name = "mbse-expressions" },
@@ -497,7 +497,7 @@ dev = [
 
 [[package]]
 name = "mbse-expressions"
-version = "0.5.1"
+version = "0.5.2"
 source = { editable = "../../mbse-expressions/python3" }
 dependencies = [
     { name = "mbse-schemas" },
@@ -523,7 +523,7 @@ dev = [
 
 [[package]]
 name = "mbse-patterns"
-version = "0.8.0"
+version = "0.8.1"
 source = { editable = "../../mbse-patterns/python3" }
 dependencies = [
     { name = "mbse-expressions" },
@@ -550,7 +550,7 @@ dev = [
 
 [[package]]
 name = "mbse-programs"
-version = "0.3.25"
+version = "0.3.26"
 source = { editable = "../../mbse-programs/python3" }
 dependencies = [
     { name = "mbse-expressions" },
@@ -587,7 +587,7 @@ dev = [
 
 [[package]]
 name = "mbse-schemas"
-version = "0.8.4"
+version = "0.9.0"
 source = { editable = "../../mbse-schemas/python3" }
 
 [package.metadata]

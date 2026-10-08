@@ -14,7 +14,12 @@
  *   adjacencies via several links of one relation (a self-relation), each field's metadata names its link (`"me"`).
  * - `Union` and `Intersection` render a named union or intersection as a value class of a dataclass field per branch or
  *   part, each optional, as a proxy's union or intersection value reads it (`card.reach.email`); its class variable
- *   `KIND` (`"union"`, `"intersection"`) says which. Their parameter `frozen` is the decision, as `Dataclass`'s.
+ *   `KIND` (`"union"`, `"intersection"`) says which. Their parameter `frozen` is the decision, as `Dataclass`'s. A flat
+ *   intersection (mbse-schemas' `flat`) is a class of its parts' properties, as a proxy reads them (`ticket.stamp.at`),
+ *   its class variable `PARTS` saying each part's schema, or the properties of an inline one.
+ * - `Alias` renders a flat union as a type alias of its branches' types (`type Channel = Call | Mail`), as a proxy reads
+ *   its value; its branches' names, where they are not their types' (`call`, `int`, `list`, `dict`), and its description
+ *   are `Annotated` metadata. It has no parameter.
  * - `Entry` renders a relation as the class of its entries, named after it: a field per link, typed by the object schemas
  *   that declare an adjacency via it (`Pager | Phone`), then one per property, and class variables `LINKS` and `UNIQUES`.
  *   An entry is shared by the objects it links, as mbse-schemas' proxies share theirs, so code reads an adjacency and its
@@ -23,6 +28,7 @@
  *   `KIND` as a union or an intersection, any other as an object schema, registered in the schemas' store; a class of
  *   the module a dataclass field names before its own step is registered empty, and filled by that step, and a name
  *   that is neither a class of the module nor a schema of the store is refused. A field's annotation is read as `Dataclass` and `Entry` write one, and any other is refused.
+ * - `FlatUnion` reads a type alias of the module back as a flat union, a branch per type of `A | B | ...`.
  *
  * `generate(schemas, policy, earlier)` and `read(module, schemas)` run each to the end. `frozen` is the one thing a
  * schema does not hold: reading code back loses it, and the trace of the generation keeps it. A generation given the
@@ -193,8 +199,9 @@ function require(module: Py.Module, source: string, named: string): void {
     found = B.ImportFrom().module((d: any) => d.add_names(source)).create();
     module.body.splice(source === "typing" ? 2 : 1, 0, found); // dataclasses is always needed first
   }
-  if (found.names.every((alias: any) => alias.name.names[0].spelling !== named)) {
-    found.names.push(B.Alias().name((d: any) => d.add_names(named)).create());
+  const names = found.names.map((alias: any) => alias.name.names[0].spelling as string);
+  if (!names.includes(named)) { // in name order, whichever step needs it first
+    found.names.splice(names.filter((other: string) => other < named).length, 0, B.Alias().name((d: any) => d.add_names(named)).create());
   }
 }
 
@@ -297,11 +304,17 @@ function renderEntry(store: Stores.Combined, match: Record<string, unknown>): vo
   place(module, built);
 }
 
-/** Places a class among the module's classes in name order, so that the module does not depend on the order of the
- * steps. */
+/** The name a class or a type alias defines, or null for another statement. */
+function defined(statement: any): string | null {
+  if (statement instanceof Py.ClassDef) return (statement as any).name.spelling;
+  return statement instanceof Py.TypeAlias ? (statement as any).name.id.spelling : null;
+}
+
+/** Places a class or a type alias among the module's in name order, so that the module does not depend on the order
+ * of the steps. */
 function place(module: Py.Module, built: any): void {
-  const after = module.body.findIndex((statement: any) => statement instanceof Py.ClassDef
-    && (statement as any).name.spelling > built.name.spelling);
+  const named = defined(built) as string;
+  const after = module.body.findIndex((statement: any) => (defined(statement) ?? "") > named);
   module.body.splice(after < 0 ? module.body.length : after, 0, built);
 }
 
@@ -321,9 +334,56 @@ export const Entry = new T.Transform("Entry", over({ r: S.OfRelation.Schema as a
 /** Where a union's and an intersection's members are, in their module form and their data. */
 const MEMBERS: Record<string, string> = { union: "branches", intersection: "parts" };
 
-function variantsRenderable(kind: string): E.Writer {
+/** Whether a part's type is an object schema whose properties render: inline, or named. */
+function objectRendered(type: E.Writer): unknown {
+  const renders = (o: E.Writer) => o.has("properties").not_().or_(o.get("properties").all("q", rendered(E.variable("q").get("type"))));
+  const named = P.Exists((q) => q.symbols({ x: S.OfObject.Schema }).requires(x.get("name").eq(type.get("named").get("name")))
+    .requires(renders(x)));
+  return E.operation("or", type.has("object").and_(renders(type.get("object"))), E.operation("and", type.has("named"), named));
+}
+
+function variantsRenderable(kind: string, flat: boolean): E.Writer {
   const members = MEMBERS[kind] as string;
-  return s.has("name").and_(s.has("parameters").not_()).and_(s.has(members)).and_(s.get(members).all("p", rendered(p.get("type"))));
+  const flatness = flat ? s.has("flat") : s.has("flat").not_();
+  const each = kind === "intersection" && flat ? objectRendered(p.get("type")) : rendered(p.get("type"));
+  return s.has("name").and_(s.has("parameters").not_()).and_(flatness).and_(s.has(members)).and_(s.get(members).all("p", each as never));
+}
+
+/** The name a flat union's branch has unless its alias says otherwise: its type's, as Python writes it. */
+function convention(type: any): string {
+  if (type instanceof S.OfIndexed.Data) return type.key === null ? "list" : "dict";
+  return type.name === null ? type.token.name : snakeCase(type.name);
+}
+
+function snakeCase(named: string): string {
+  return named.replace(/(?<!^)(?=[A-Z])/g, "_").toLowerCase();
+}
+
+type MetadataValue = string | MetadataValue[] | { [key: string]: MetadataValue };
+
+/** A dict literal of text, lists of text and dicts of them. */
+function metadataLiteral(value: MetadataValue): (b: any) => any {
+  if (typeof value === "string") return (b) => b.Constant().spelling(quoted(value));
+  if (Array.isArray(value)) return (b) => value.reduce((built: any, item) => built.add_elts(metadataLiteral(item)), b.List());
+  return (b) => Object.entries(value).reduce((built: any, [key, item]) => built.add_items(
+    (i: any) => i.key(metadataLiteral(key)).value(metadataLiteral(item))), b.Dict());
+}
+
+function renderAlias(store: Stores.Combined, match: Record<string, unknown>): void {
+  const schema = match["s"] as any;
+  const B = Py.LANGUAGE.Builders as any;
+  const union = (schema.branches as any[]).slice(1).reduce((left: (b: any) => any, branch: any) => (b: any) => b.BinOp().left(left)
+    .op("|").right(annotation(branch.type)), annotation(schema.branches[0].type));
+  const metadata: Record<string, MetadataValue> = {};
+  const names = (schema.branches as any[]).map((branch) => branch.name as string);
+  if (names.join("\u0000") !== (schema.branches as any[]).map((branch) => convention(branch.type)).join("\u0000")) metadata["branches"] = names;
+  if (schema.description !== null) metadata["description"] = schema.description;
+  const hasMetadata = Object.keys(metadata).length > 0;
+  const value = !hasMetadata ? union : (b: any) => b.Subscript().value((x: any) => name(x, "Annotated")).slice(
+    (x: any) => x.Tuple().add_elts(union).add_elts(metadataLiteral(metadata)));
+  const module = moduleOf(store);
+  if (hasMetadata) require(module, "typing", "Annotated");
+  place(module, B.TypeAlias().name((b: any) => b.id(schema.name)).value(value).create());
 }
 
 function renderVariants(kind: string) {
@@ -332,8 +392,21 @@ function renderVariants(kind: string) {
     const B = Py.LANGUAGE.Builders as any;
     const body = [...docstring(schema.description), B.AnnAssign().target((b: any) => name(b, "KIND")).annotation(
       (b: any) => b.Subscript().value((x: any) => name(x, "ClassVar")).slice((x: any) => name(x, "str"))).value(
-      (b: any) => b.Constant().spelling(quoted(kind))).create(),
-      ...(schema[MEMBERS[kind] as string] as any[]).map((member) => optionalField(member.name, annotation(member.type)))];
+      (b: any) => b.Constant().spelling(quoted(kind))).create()];
+    let members = schema[MEMBERS[kind] as string] as any[];
+    if (schema.flat) { // an intersection's parts' properties as its own, and which part each is from
+      const parts = members.map((part): [string, string | string[]] => [part.name,
+        part.type.name !== null ? part.type.name : [...part.type.properties.keys()]]);
+      body.push(B.AnnAssign().target((b: any) => name(b, "PARTS")).annotation(
+        (b: any) => b.Subscript().value((x: any) => name(x, "ClassVar")).slice((x: any) => x.Subscript().value(
+          (y: any) => name(y, "dict")).slice((y: any) => y.Tuple().add_elts((z: any) => name(z, "str")).add_elts(
+          (z: any) => z.BinOp().left((v: any) => name(v, "str")).op("|").right(texts(1)))))).value(
+        (b: any) => parts.reduce((built: any, [part, held]) => built.add_items((i: any) => i.key(
+          (k: any) => k.Constant().spelling(quoted(part))).value(typeof held === "string"
+            ? (v: any) => v.Constant().spelling(quoted(held)) : (v: any) => v.Parenthesized().value(strings(held)))), b.Dict())).create());
+      members = members.flatMap((part) => [...(S.structure(part.type) as any).properties.values()]);
+    }
+    body.push(...members.map((member) => optionalField(member.name, annotation(member.type))));
     const built = B.ClassDef().name(schema.name).add_decorator_list(decorator(schema, args["frozen"] as boolean)).create();
     built.body = body;
     const module = moduleOf(store);
@@ -344,7 +417,9 @@ function renderVariants(kind: string) {
 }
 
 function variants(kind: string, meta: any): T.Transform {
-  return new T.Transform(kind.slice(0, 1).toUpperCase() + kind.slice(1), over({ s: meta }, variantsRenderable(kind)),
+  const renderable = kind === "intersection" ? E.operation("or", variantsRenderable(kind, false), variantsRenderable(kind, true))
+    : variantsRenderable(kind, false);
+  return new T.Transform(kind.slice(0, 1).toUpperCase() + kind.slice(1), over({ s: meta }, renderable),
     over({ s: meta }, HAS_CLASS), {
       parameters: [(q) => q.name("frozen").of((x) => x.as_native(Boolean)).description("Whether the class is frozen")],
       rewrite: renderVariants(kind) as never,
@@ -357,6 +432,16 @@ export const Union = variants("union", S.OfUnion.Schema);
 /** A named intersection as a class of a field per part, as a proxy's intersection value reads it, its class variable
  * `KIND` `"intersection"`. */
 export const Intersection = variants("intersection", S.OfIntersection.Schema);
+
+const [al, nm] = [E.variable("al"), E.variable("nm")];
+/** Whether the module has a type alias named after `s`. */
+const HAS_ALIAS = P.Exists((q) => q.symbols({ al: Py.TypeAlias.Schema, nm: Py.Name.Schema }).requires(
+  P.Contains(al.children, (e) => e.property.eq("name").and_(e.child.eq(nm)))).requires(
+  P.Contains(nm.children, (e) => e.property.eq("id").and_(e.child.spelling.eq(s.name)))));
+/** A flat union as a type alias of its branches' types (`type Channel = Call | Mail`), as a proxy reads its value; its
+ * branches' names and its description, where it has them, in `Annotated` metadata. */
+export const Alias = new T.Transform("Alias", over({ s: S.OfUnion.Schema }, variantsRenderable("union", true)),
+  over({ s: S.OfUnion.Schema }, HAS_ALIAS), { rewrite: renderAlias as never });
 
 // --- Classes to schemas ---
 
@@ -423,8 +508,12 @@ function typeOf(schemas: Stores.Store, node: any, where: string, module: Py.Modu
  * that is neither is refused: reading never makes up a schema. */
 function registered(schemas: Stores.Store, named: string, module: Py.Module, where = ""): any {
   if (![...schemas.names()].includes(named)) {
-    const cls = module.body.find((statement: any) => statement instanceof Py.ClassDef && (statement as any).name.spelling === named);
+    const cls = module.body.find((statement: any) => defined(statement) === named);
     if (cls === undefined) throw new ValueError(`${where}: ${named} is not a class of the module or a schema of the store`);
+    if (cls instanceof Py.TypeAlias) {
+      (schemas as any).register(new S.OfUnion.Builder().name(named).flat().create());
+      return schemas.registered(named);
+    }
     const kind = classVariables(cls).get("KIND");
     const made = kind === "union" ? new S.OfUnion.Builder().name(named).create() : kind === "intersection"
       ? new S.OfIntersection.Builder().name(named).create() : new S.OfObject.Builder().name(named).create();
@@ -459,7 +548,8 @@ function keywords(node: any): Map<string, string> {
 function classVariables(cls: any): Map<string, any> {
   const value = (node: any): any => {
     const inner = node instanceof Py.Parenthesized ? node.value : node;
-    return inner instanceof Py.Tuple ? inner.elts.map(value) : unquoted(inner.spelling);
+    if (inner instanceof Py.Dict) return Object.fromEntries(inner.items.map((item: any) => [value(item.key), value(item.value)]));
+    return inner instanceof Py.Tuple || inner instanceof Py.List ? inner.elts.map(value) : unquoted(inner.spelling);
   };
   return new Map(cls.body.filter((statement: any) => statement instanceof Py.AnnAssign && statement.annotation instanceof Py.Subscript
     && statement.annotation.value instanceof Py.Name && spelling(statement.annotation.value) === "ClassVar")
@@ -535,13 +625,18 @@ function readEntry(schemas: Stores.Store, module: Py.Module, cls: any): void {
 /** Fills the union or intersection a class describes (`KIND`): a branch or part per field, and its description. */
 function readVariants(schemas: Stores.Store, module: Py.Module, cls: any, kind: string): void {
   const named = cls.name.spelling as string;
-  const members = fieldsOf(cls).map((item: any) => {
-    const type = typeOf(schemas, optional(item.annotation), `${named}.${spelling(item.target)}`, module);
-    return (q: any) => q.name(property(spelling(item.target))).of(type);
-  });
+  const typed = new Map(fieldsOf(cls).map((item: any) => [property(spelling(item.target)),
+    typeOf(schemas, optional(item.annotation), `${named}.${spelling(item.target)}`, module)]));
+  const parts = classVariables(cls).get("PARTS") as Record<string, string | string[]> | undefined;
+  const members = parts === undefined ? [...typed].map(([f, type]) => (q: any) => q.name(f).of(type))
+    : Object.entries(parts).map(([part, held]) => {
+      const type = typeof held === "string" ? registered(schemas, held, module, `${named}.PARTS`)
+        : new S.OfObject.Builder().properties(...held.map((g) => (r: any) => r.name(g).of(typed.get(g)))).create();
+      return (q: any) => q.name(part).of(type);
+    });
   const data = registered(schemas, named, module);
   let builder: any = kind === "union" ? new S.OfUnion.Builder(data).branches(...members)
-    : new S.OfIntersection.Builder(data).parts(...members);
+    : new S.OfIntersection.Builder(data).parts(...members).flat(parts !== undefined);
   const described = docstringOf(cls);
   if (described !== null) builder = builder.description(described);
   builder.update();
@@ -584,15 +679,54 @@ function readClass(store: Stores.Combined, match: Record<string, unknown>): void
   builder.update();
 }
 
+/** The types of `A | B | ...`, in order: names or subscripts. */
+function branchesOf(node: any): any[] {
+  return node instanceof Py.BinOp && node.op === "|" ? [...branchesOf(node.left), ...branchesOf(node.right)] : [node];
+}
+
+/** The name a branch has unless its alias says otherwise, from its annotation, as `convention` from its type. */
+function namedConvention(node: any): string {
+  const named = spelling(node instanceof Py.Subscript ? node.value : node);
+  return NATIVES.includes(named) || node instanceof Py.Subscript ? named : snakeCase(named);
+}
+
+function readAlias(store: Stores.Combined, match: Record<string, unknown>): void {
+  const alias = match["al"] as any;
+  const [schemas, module, named] = [schemasOf(store), moduleOf(store), alias.name.id.spelling as string];
+  let [value, metadata]: [any, Record<string, any>] = [alias.value, {}];
+  if (value instanceof Py.Subscript && value.value instanceof Py.Name && spelling(value.value) === "Annotated") {
+    const [union, held] = (value.slice as any).elts;
+    value = union;
+    metadata = Object.fromEntries(held.items.map((item: any) => [unquoted(item.key.spelling), item.value instanceof Py.Constant
+      ? unquoted(item.value.spelling) : item.value.elts.map((e: any) => unquoted(e.spelling))]));
+  }
+  const nodes = branchesOf(value);
+  const names: string[] = metadata["branches"] ?? nodes.map(namedConvention);
+  let builder: any = new S.OfUnion.Builder(registered(schemas, named, module)).branches(...nodes.map((node, i) => {
+    const type = typeOf(schemas, node, `${named}.${names[i]}`, module);
+    return (q: any) => q.name(names[i]).of(type);
+  })).flat();
+  if (metadata["description"] !== undefined) builder = builder.description(metadata["description"]);
+  builder.update();
+}
+
+const ALIASED = P.Exists((q) => q.symbols({ t: S.OfUnion.Schema, nm: Py.Name.Schema }).requires(
+  P.Contains(al.children, (e) => e.property.eq("name").and_(e.child.eq(nm)))).requires(
+  P.Contains(nm.children, (e) => e.property.eq("id").and_(e.child.spelling.eq(t.name)))).requires(t.has("branches")));
+/** A type alias of the module as a flat union: a branch per type of `A | B | ...`, named after it, or as its
+ * `Annotated` metadata says. */
+export const FlatUnion = new T.Transform("FlatUnion", over({ al: Py.TypeAlias.Schema }, al.has("kind")),
+  over({ al: Py.TypeAlias.Schema }, ALIASED), { rewrite: readAlias as never });
+
 /** A dataclass of the module as an object schema, or an entry class (with `LINKS`) as a relation. */
 export const Schema = new T.Transform("Schema", over({ c: Py.ClassDef.Schema }, DECORATED),
   over({ c: Py.ClassDef.Schema }, HAS_SCHEMA), { rewrite: readClass as never });
 
-export const TO_PYTHON = [Dataclass, Entry, Union, Intersection];
-export const FROM_PYTHON = [Schema];
+export const TO_PYTHON = [Dataclass, Entry, Union, Intersection, Alias];
+export const FROM_PYTHON = [Schema, FlatUnion];
 /** Classes that are not frozen, and every relation's entry class. */
 export const PLAIN = new T.Policy(new T.Clause("Dataclass", { frozen: false }), new T.Clause("Entry"),
-  new T.Clause("Union", { frozen: false }), new T.Clause("Intersection", { frozen: false }));
+  new T.Clause("Union", { frozen: false }), new T.Clause("Intersection", { frozen: false }), new T.Clause("Alias"));
 
 /** A session that renders the schemas `schemas` registers, and those they refer to, as the dataclasses of a new module,
  * run to the end: each decision an `earlier` step with its key took (`Dataclass(s=Contact)`) taken again, the others by
@@ -608,7 +742,7 @@ export function generate(schemas: Stores.Store, policy: T.Policy = PLAIN, earlie
  * the end. */
 export function read(module: Py.Module, schemas: Stores.Store | null = null): T.Session {
   const session = new T.Session(store(schemas ?? new Proxies.OfStore(), module), [...FROM_PYTHON]);
-  session.run(new T.Policy(new T.Clause("Schema")));
+  session.run(new T.Policy(new T.Clause("Schema"), new T.Clause("FlatUnion")));
   return session;
 }
 
@@ -616,8 +750,7 @@ export function read(module: Py.Module, schemas: Stores.Store | null = null): T.
  * `Dataclass` or `Entry` does not render (see their befores), whose names a field may still name (completeness, which
  * mbse-patterns plans in general). */
 export function missing(session: T.Session): any[] {
-  const classes = new Set(moduleOf(session.store as Stores.Combined).body.filter((statement) => statement instanceof Py.ClassDef)
-    .map((statement: any) => statement.name.spelling));
+  const classes = new Set(moduleOf(session.store as Stores.Combined).body.map(defined));
   return ["Schemas.Object", "Schemas.Union", "Schemas.Intersection", "Schemas.Relation"].flatMap((kind) => [...session.store.extent(kind)])
     .filter((schema: any) => !classes.has(schema.name));
 }

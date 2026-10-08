@@ -122,7 +122,9 @@ check(proxy.items.map((entry: any) => entry.since).join() === "2020", "proxies")
    its properties, with class variables `LINKS` and `UNIQUES`; each adjacency, on both ends, is one field named after it
    holding its entries (`phones: tuple[Phones, ...] = ()`), so code reads proxies and generated classes alike
    (`for entry in contact.phones: entry.phone.number`). A named union or intersection is a value class of a dataclass
-   field per branch or part (`KIND` says which), read as proxies read union values (`card.reach.email`).
+   field per branch or part (`KIND` says which), read as proxies read union values (`card.reach.email`). Configured
+   `flat` in the schema, a union is a type alias of its branches' types (`type Channel = Call | Mail`, `Alias`), and an
+   intersection a class of its parts' properties (`PARTS` says whose), as flat proxies read them.
    `Types.missing(session)` lists the object schemas left without a class.
 3. **What reads back.** A `@dataclass` class (`@dataclass(...)` too) whose annotations are written as `Dataclass`
    writes them, `| None` or not; anything else raises `ValueError` naming the field. Reading registers the schemas in
@@ -133,4 +135,4 @@ check(proxy.items.map((entry: any) => entry.since).join() === "2020", "proxies")
 5. **Round trips.** Schemas to source to schemas gives the same schemas; source to schemas to source gives the source as
    Python 3.12 prints it, given the same decisions. `frozen` is the one thing a schema does not hold.
 
-The design, and what is not rendered yet (unions, parameters, relations): [CODEGEN.md](https://github.com/pitaman71/mbse-codegen-python/blob/main/docs/CODEGEN.md).
+The design, and what is not rendered yet (parameters, named natives, extents): [CODEGEN.md](https://github.com/pitaman71/mbse-codegen-python/blob/main/docs/CODEGEN.md).

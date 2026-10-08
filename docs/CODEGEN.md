@@ -3,7 +3,7 @@
 
 # Code generation for Python
 
-Status: `Types` is built (0.1): schemas to dataclasses and back. It applies [mbse-patterns' transforms
+Status: `Types` is built (0.1–0.8): schemas to dataclasses and type aliases, and back. It applies [mbse-patterns' transforms
 design](https://github.com/pitaman71/mbse-patterns/blob/main/docs/TRANSFORMS.md) to Python: phase 2 of its plan, the
 first transform with both directions.
 
@@ -36,10 +36,12 @@ requires.
 | Transform | Symbols | Before | After | Parameters |
 |---|---|---|---|---|
 | `Dataclass` | `s`: `Schemas.OfObject.Schema` | `s` is named, declares no parameters, every property's type renders, and every adjacency is to a named relation | the module has a class named after `s` | `frozen`: `bool` |
-| `Union` | `s`: `Schemas.OfUnion.Schema` | `s` is named, declares no parameters, has branches, and every branch's type renders | the module has a class named after `s` | `frozen`: `bool` |
-| `Intersection` | `s`: `Schemas.OfIntersection.Schema` | `s` is named, declares no parameters, has parts, and every part's type renders | the module has a class named after `s` | `frozen`: `bool` |
+| `Union` | `s`: `Schemas.OfUnion.Schema` | `s` is named, not `flat`, declares no parameters, has branches, and every branch's type renders | the module has a class named after `s` | `frozen`: `bool` |
+| `Intersection` | `s`: `Schemas.OfIntersection.Schema` | `s` is named, declares no parameters, has parts, and every part's type renders, or, `flat`, is an object schema whose properties render | the module has a class named after `s` | `frozen`: `bool` |
+| `Alias` | `s`: `Schemas.OfUnion.Schema` | `s` is named, `flat`, declares no parameters, has branches, and every branch's type renders | the module has a type alias named after `s` | none |
 | `Entry` | `r`: `Schemas.OfRelation.Schema` | `r` is named, declares no parameters, every property's type renders, and every link is declared by an object schema | the module has a class named after `r` | none |
 | `Schema` | `c`: `Programs.Python.ClassDef` | `c` is decorated `@dataclass` or `@dataclass(...)` | a relation named after `c` has its links, or an object schema named after `c` has a property or adjacency per field, is `ref` where `c` is `eq=False`, and is described where `c` has a docstring | none |
+| `FlatUnion` | `al`: `Programs.Python.TypeAlias` | always | a union named after `al` has branches | none |
 
 - **A class is one step**, with all its fields: its one decision is `frozen`, and the fields follow from the schema.
   A symbol binds a schema, never a property: a property is a value within a schema, read with `get`, quantified over
@@ -71,6 +73,13 @@ requires.
   `Person.children` and `Person.parents` through `Parentage`), each field's metadata names its link:
   `field(default=(), metadata={"me": "parent"})`. A relation the store holds, with no class in the module, needs it
   too.
+- **Flat, where the schema says so.** A union or intersection configured `flat` (mbse-schemas 0.9) reads, on proxies
+  and generated code alike, as Python's own forms. A flat union is a type alias of its branches' types (`type Channel =
+  Call | Mail`): its value is the branch's value, told apart by type. Its branches' names, where they differ from their
+  types' (`call` for `Call`, `int`, `list`, `dict`), and its description, are `Annotated` metadata (`type Code =
+  Annotated[int | str, {"branches": ["n", "s"], "description": "A code"}]`). A flat intersection is a class of its
+  parts' properties (`ticket.stamp.at`), whose class variable `PARTS` says each part's schema, or the properties of an
+  inline part: `{"when": ("at",), "who": "Who"}`. The wire form stays tagged.
 - **Absent reads as `None`** on both: a generated field defaults to `None`, and a proxy reads a property that is not set
   as `None` (mbse-schemas 0.8.4), so code that handles a missing value works on either.
 - **A field is optional**, as every property is (mbse-schemas: nothing is mandatory but by a constraint):
@@ -97,10 +106,6 @@ requires.
 
 ## Open questions
 
-- **Flat unions and intersections** (planned: mbse-schemas 0.9, codegen 0.8). A union or intersection schema
-  configured `flat` reads, on proxies and generated classes alike, as Python's own forms: a union value is its branch's
-  value (`Phone | str`, told apart by type), an intersection's parts' properties are its own. Its branches must be
-  distinguishable by runtime type, and its parts' properties must not collide; the wire form stays tagged.
 - **Model parameters.** A parametric schema as a generic dataclass (`class Matrix[T]`) needs type parameters, which
   mbse-schemas has not built yet; value parameters (an extent's bound) have no Python construct.
 - **Runtime bindings.** The generated classes hold relations as containers, but are not bound to a store: generating
@@ -130,6 +135,9 @@ requires.
 - Unions and intersections render as value classes of a dataclass field per branch or part (0.7), as proxies read
   union and intersection values, the default form; `KIND` says which on the way back. Reading back never makes up a
   schema: a name that is neither a class of the module nor a schema of the store is refused.
+- Unions and intersections may be configured `flat` in the schema (mbse-schemas 0.9, codegen 0.8): a type alias of
+  the branches' types and a class of the parts' properties, as flat proxies read them. Both forms are a schema's
+  configuration, not a decision of codegen, since code written against one does not read the other.
 - Names Python cannot spell are written as they are, flagged by mbse-programs' validation (which already holds any
   spelling and flags those), and an error only when the source is taken (0.4), so that a step may still configure
   them. Keyed lists and nested lists render, as mbse-schemas' older Python adapter

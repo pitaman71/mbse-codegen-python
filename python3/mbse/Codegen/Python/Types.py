@@ -13,7 +13,12 @@ singleton `Codegen.Output` holds the module written or read. Each step is one de
   adjacencies via several links of one relation (a self-relation), each field's metadata names its link (`"me"`).
 - `Union` and `Intersection` render a named union or intersection as a value class of a dataclass field per branch or
   part, each optional, as a proxy's union or intersection value reads it (`card.reach.email`); its class variable
-  `KIND` (`"union"`, `"intersection"`) says which. Their parameter `frozen` is the decision, as `Dataclass`'s.
+  `KIND` (`"union"`, `"intersection"`) says which. Their parameter `frozen` is the decision, as `Dataclass`'s. A flat
+  intersection (mbse-schemas' `flat`) is a class of its parts' properties, as a proxy reads them (`ticket.stamp.at`),
+  its class variable `PARTS` saying each part's schema, or the properties of an inline one.
+- `Alias` renders a flat union as a type alias of its branches' types (`type Channel = Call | Mail`), as a proxy reads
+  its value; its branches' names, where they are not their types' (`call`, `int`, `list`, `dict`), and its description
+  are `Annotated` metadata. It has no parameter.
 - `Entry` renders a relation as the class of its entries, named after it: a field per link, typed by the object schemas
   that declare an adjacency via it (`Pager | Phone`), then one per property, and class variables `LINKS` and `UNIQUES`.
   An entry is shared by the objects it links, as mbse-schemas' proxies share theirs, so code reads an adjacency and its
@@ -22,6 +27,7 @@ singleton `Codegen.Output` holds the module written or read. Each step is one de
   `KIND` as a union or an intersection, any other as an object schema, registered in the schemas' store; a class of the
   module a dataclass field names before its own step is registered empty, and filled by that step, and a name that is
   neither a class of the module nor a schema of the store is refused. A field's annotation is read as `Dataclass` and `Entry` write one, and any other is refused.
+- `FlatUnion` reads a type alias of the module back as a flat union, a branch per type of `A | B | ...`.
 
 `generate(schemas, policy, earlier)` and `read(module, schemas)` run each to the end. `frozen` is the one thing a schema
 does not hold: reading code back loses it, and the trace of the generation keeps it. A generation given the steps of an
@@ -43,7 +49,7 @@ from mbse.Programs.Python import Python312, Syntax as Py
 from mbse.Schemas.Framework import Bindings, Proxies, Reflection, Schemas as S, Stores
 
 __all__ = ["OUTPUT", "NATIVES", "KEYWORDS", "DEPTH", "Output", "Generated", "store", "Dataclass", "Entry", "Union",
-           "Intersection", "Schema", "TO_PYTHON",
+           "Intersection", "Alias", "Schema", "FlatUnion", "TO_PYTHON",
            "FROM_PYTHON", "PLAIN", "missing", "problems",
            "generate", "read", "text"]
 
@@ -203,8 +209,9 @@ def _require(module: Py.Module, source: str, name: str) -> None:
         found = B.ImportFrom().module(lambda d: d.add_names(source)).create()
         position = 2 if source == "typing" else 1  # dataclasses is always needed first
         module.body.insert(position, found)
-    if all(alias.name.names[0].spelling != name for alias in found.names):
-        found.names.append(B.Alias().name(lambda d: d.add_names(name)).create())
+    names = [alias.name.names[0].spelling for alias in found.names]
+    if name not in names:  # in name order, whichever step needs it first
+        found.names.insert(sum(1 for other in names if other < name), B.Alias().name(lambda d: d.add_names(name)).create())
 
 
 def _decorator(schema: Any, frozen: bool) -> Any:
@@ -310,11 +317,18 @@ def _render_entry(store: Stores.Combined, match: dict[str, Any], arguments: dict
     _place(module, built)
 
 
-def _place(module: Py.Module, built: Py.ClassDef) -> None:
-    """Places a class among the module's classes in name order, so that the module does not depend on the order of the
-    steps."""
-    after = [i for i, statement in enumerate(module.body)
-             if isinstance(statement, Py.ClassDef) and statement.name.spelling > built.name.spelling]
+def _defined(statement: Any) -> str | None:
+    """The name a class or a type alias defines, or None for another statement."""
+    if isinstance(statement, Py.ClassDef):
+        return statement.name.spelling
+    return statement.name.id.spelling if isinstance(statement, Py.TypeAlias) else None
+
+
+def _place(module: Py.Module, built: Any) -> None:
+    """Places a class or a type alias among the module's in name order, so that the module does not depend on the order
+    of the steps."""
+    name = _defined(built)
+    after = [i for i, statement in enumerate(module.body) if (_defined(statement) or "") > name]
     module.body.insert(after[0] if after else len(module.body), built)
 
 
@@ -334,10 +348,61 @@ _MEMBERS = {"union": "branches", "intersection": "parts"}
 """Where a union's and an intersection's members are, in their module form and their data."""
 
 
-def _variants_renderable(kind: str) -> Any:
+def _object_rendered(type_: E.Writer) -> E.Writer:
+    """Whether a part's type is an object schema whose properties render: inline, or named."""
+    inline = type_.get("object")
+    renders = lambda o: o.has("properties").not_().or_(o.get("properties").all("q", _rendered(E.variable("q").get("type"))))  # noqa: E731
+    named = P.Exists(lambda q: q.symbols({"x": S.OfObject.Schema}).requires(
+        x.get("name").eq(type_.get("named").get("name"))).requires(renders(x)))
+    return E.operation("or", type_.has("object").and_(renders(inline)), E.operation("and", type_.has("named"), named))
+
+
+def _variants_renderable(kind: str, flat: bool) -> Any:
     members = _MEMBERS[kind]
-    return s.has("name").and_(s.has("parameters").not_()).and_(s.has(members)).and_(
-        s.get(members).all("p", _rendered(p.get("type"))))
+    flatness = s.has("flat") if flat else s.has("flat").not_()
+    each = _object_rendered(p.get("type")) if kind == "intersection" and flat else _rendered(p.get("type"))
+    return s.has("name").and_(s.has("parameters").not_()).and_(flatness).and_(s.has(members)).and_(s.get(members).all("p", each))
+
+
+def _convention(type_: Any) -> str:
+    """The name a flat union's branch has unless its alias says otherwise: its type's, as Python writes it."""
+    if isinstance(type_, S.OfIndexed.Data):
+        return "list" if type_.key is None else "dict"
+    return type_.token.name if type_.name is None else _snake(type_.name)
+
+
+def _snake(name: str) -> str:
+    return re.sub(r"(?<!^)(?=[A-Z])", "_", name).lower()
+
+
+def _metadata(entries: dict[str, Any]) -> Any:
+    """A dict literal of text, lists of text and dicts of them."""
+    def literal(value: Any) -> Any:
+        if isinstance(value, str):
+            return lambda b: b.Constant().spelling(_quoted(value))
+        if isinstance(value, list):
+            return lambda b: functools.reduce(lambda built, item: built.add_elts(literal(item)), value, b.List())
+        return lambda b: functools.reduce(lambda built, item: built.add_items(
+            lambda i: i.key(literal(item[0])).value(literal(item[1]))), value.items(), b.Dict())
+    return literal(entries)
+
+
+def _render_alias(store: Stores.Combined, match: dict[str, Any], arguments: dict[str, Any]) -> None:
+    schema = match["s"]
+    B = Py.LANGUAGE.Builders
+    union = functools.reduce(lambda left, branch: lambda b: b.BinOp().left(left).op("|").right(_annotation(branch.type)),
+                             schema.branches[1:], _annotation(schema.branches[0].type))
+    metadata: dict[str, Any] = {}
+    if [branch.name for branch in schema.branches] != [_convention(branch.type) for branch in schema.branches]:
+        metadata["branches"] = [branch.name for branch in schema.branches]
+    if schema.description is not None:
+        metadata["description"] = schema.description
+    value = union if not metadata else lambda b: b.Subscript().value(lambda x: _name(x, "Annotated")).slice(
+        lambda x: x.Tuple().add_elts(union).add_elts(_metadata(metadata)))
+    module = _module(store)
+    if metadata:
+        _require(module, "typing", "Annotated")
+    _place(module, B.TypeAlias().name(lambda b: b.id(schema.name)).value(value).create())
 
 
 def _render_variants(kind: str) -> Any:
@@ -348,6 +413,18 @@ def _render_variants(kind: str) -> Any:
         body = _docstring(schema.description) + [Py.LANGUAGE.Builders.AnnAssign().target(lambda b: _name(b, "KIND")).annotation(
             lambda b: b.Subscript().value(lambda x: _name(x, "ClassVar")).slice(lambda x: _name(x, "str"))).value(
             lambda b: b.Constant().spelling(_quoted(kind))).create()]
+        if schema.flat:  # an intersection's parts' properties as its own, and which part each is from
+            parts = {part.name: part.type.name if part.type.name is not None else list(part.type.properties)
+                     for part in members}
+            body.append(B.AnnAssign().target(lambda b: _name(b, "PARTS")).annotation(
+                lambda b: b.Subscript().value(lambda x: _name(x, "ClassVar")).slice(lambda x: x.Subscript().value(
+                    lambda y: _name(y, "dict")).slice(lambda y: y.Tuple().add_elts(lambda z: _name(z, "str")).add_elts(
+                        lambda z: z.BinOp().left(lambda w: _name(w, "str")).op("|").right(_texts(1)))))).value(
+                lambda b: functools.reduce(lambda built, item: built.add_items(lambda i: i.key(
+                    lambda k: k.Constant().spelling(_quoted(item[0]))).value(
+                    (lambda v: v.Constant().spelling(_quoted(item[1]))) if isinstance(item[1], str) else
+                    (lambda v: v.Parenthesized().value(_strings(item[1]))))), parts.items(), b.Dict())).create())
+            members = [prop for part in members for prop in S.structure(part.type).properties.values()]
         body += [_optional_field(member.name, _annotation(member.type)) for member in members]
         built = B.ClassDef().name(schema.name).add_decorator_list(_decorator(schema, arguments["frozen"])).create()
         built.body = body
@@ -359,16 +436,30 @@ def _render_variants(kind: str) -> Any:
 
 
 def _variants(kind: str, meta: Any) -> T.Transform:
+    renderable = _variants_renderable(kind, False)
+    if kind == "intersection":
+        renderable = E.operation("or", renderable, _variants_renderable(kind, True))
     return T.Transform(
-        kind.capitalize(), _over({"s": meta}, _variants_renderable(kind)), _over({"s": meta}, _HAS_CLASS),
+        kind.capitalize(), _over({"s": meta}, renderable), _over({"s": meta}, _HAS_CLASS),
         [lambda q: q.name("frozen").of(lambda x: x.as_native(bool)).description("Whether the class is frozen")],
         _render_variants(kind))
+
+
+al, nm = E.variable("al"), E.variable("nm")
+_HAS_ALIAS = P.Exists(lambda q: q.symbols({"al": Py.TypeAlias.Schema, "nm": Py.Name.Schema}).requires(
+    P.Contains(al.children, lambda e: e.property == "name" and e.child == nm)).requires(
+    P.Contains(nm.children, lambda e: e.property == "id" and e.child.spelling == s.name)))
+"""Whether the module has a type alias named after `s`."""
 
 
 Union = _variants("union", S.OfUnion.Schema)
 """A named union as a class of a field per branch, of which one is set, as a proxy's union value reads it, its class
 variable `KIND` `"union"`."""
 Intersection = _variants("intersection", S.OfIntersection.Schema)
+Alias = T.Transform("Alias", _over({"s": S.OfUnion.Schema}, _variants_renderable("union", True)),
+                    _over({"s": S.OfUnion.Schema}, _HAS_ALIAS), rewrite=_render_alias)
+"""A flat union as a type alias of its branches' types (`type Channel = Call | Mail`), as a proxy reads its value; its
+branches' names and its description, where it has them, in `Annotated` metadata."""
 """A named intersection as a class of a field per part, as a proxy's intersection value reads it, its class variable
 `KIND` `"intersection"`."""
 
@@ -438,10 +529,12 @@ def _named(schemas: Stores.Store, name: str, module: Py.Module, where: str = "")
     filled when that class is read: a union or an intersection where the class says so (`KIND`), else an object schema.
     A name that is neither is refused: reading never makes up a schema."""
     if name not in schemas.names():
-        cls = next((statement for statement in module.body
-                    if isinstance(statement, Py.ClassDef) and statement.name.spelling == name), None)
+        cls = next((statement for statement in module.body if _defined(statement) == name), None)
         if cls is None:
             raise ValueError(f"{where}: {name} is not a class of the module or a schema of the store")
+        if isinstance(cls, Py.TypeAlias):
+            schemas.register(S.OfUnion.Builder().name(name).flat().create())
+            return schemas.registered(name)
         kind = _class_variables(cls).get("KIND")
         builder = {"union": S.OfUnion.Builder, "intersection": S.OfIntersection.Builder}.get(kind, S.OfObject.Builder)
         schemas.register(builder().name(name).create())
@@ -478,7 +571,9 @@ def _class_variables(cls: Any) -> dict[str, Any]:
     """The values of a class's `ClassVar`s, by name: tuples of text, or of tuples of text."""
     def value(node: Any) -> Any:
         node = node.value if isinstance(node, Py.Parenthesized) else node
-        return [value(item) for item in node.elts] if isinstance(node, Py.Tuple) else _unquoted(node.spelling)
+        if isinstance(node, Py.Dict):
+            return {value(item.key): value(item.value) for item in node.items}
+        return [value(item) for item in node.elts] if isinstance(node, (Py.Tuple, Py.List)) else _unquoted(node.spelling)
     return {_spelling(statement.target): value(statement.value) for statement in cls.body
             if isinstance(statement, Py.AnnAssign) and isinstance(statement.annotation, Py.Subscript)
             and isinstance(statement.annotation.value, Py.Name) and _spelling(statement.annotation.value) == "ClassVar"}
@@ -559,14 +654,24 @@ def _read_entry(schemas: Stores.Store, module: Py.Module, cls: Any) -> None:
 
 
 def _read_variants(schemas: Stores.Store, module: Py.Module, cls: Any, kind: str) -> None:
-    """Fills the union or intersection a class describes (`KIND`): a branch or part per field, and its description."""
+    """Fills the union or intersection a class describes (`KIND`): a branch or part per field, or, flat (`PARTS`), a
+    part per entry of `PARTS`, a named object schema or an inline one of the properties it lists; and its
+    description."""
     name = cls.name.spelling
-    members = [lambda q, f=_property(_spelling(field.target)), y=_type(
-        schemas, _optional(field.annotation), f"{name}.{_spelling(field.target)}", module): q.name(f).of(y)
-        for field in _fields(cls)]
+    typed = {_property(_spelling(field.target)): _type(schemas, _optional(field.annotation),
+                                                       f"{name}.{_spelling(field.target)}", module)
+             for field in _fields(cls)}
+    parts = _class_variables(cls).get("PARTS")
+    if parts is None:
+        members = [lambda q, f=f, y=y: q.name(f).of(y) for f, y in typed.items()]
+    else:
+        members = [lambda q, f=part, y=(_named(schemas, held, module, f"{name}.PARTS") if isinstance(held, str) else
+                                        S.OfObject.Builder().properties(*[lambda r, g=g: r.name(g).of(typed[g])
+                                                                          for g in held]).create()):
+                   q.name(f).of(y) for part, held in parts.items()]
     data = _named(schemas, name, module)
     builder = (S.OfUnion.Builder(data).branches(*members) if kind == "union" else
-               S.OfIntersection.Builder(data).parts(*members))
+               S.OfIntersection.Builder(data).parts(*members).flat(parts is not None))
     docstring = _docstring_of(cls)
     if docstring is not None:
         builder = builder.description(docstring)
@@ -610,14 +715,54 @@ def _read_class(store: Stores.Combined, match: dict[str, Any], arguments: dict[s
     builder.update()
 
 
+def _branches(node: Any) -> list[Any]:
+    """The types of `A | B | ...`, in order: names or subscripts."""
+    if isinstance(node, Py.BinOp) and node.op == "|":
+        return [*_branches(node.left), *_branches(node.right)]
+    return [node]
+
+
+def _named_convention(node: Any) -> str:
+    """The name a branch has unless its alias says otherwise, from its annotation, as `_convention` from its type."""
+    head = node.value if isinstance(node, Py.Subscript) else node
+    name = _spelling(head)
+    return name if name in NATIVES or isinstance(node, Py.Subscript) else _snake(name)
+
+
+def _read_alias(store: Stores.Combined, match: dict[str, Any], arguments: dict[str, Any]) -> None:
+    alias = match["al"]
+    schemas, module, name = _schemas(store), _module(store), alias.name.id.spelling
+    value, metadata = alias.value, {}
+    if isinstance(value, Py.Subscript) and isinstance(value.value, Py.Name) and _spelling(value.value) == "Annotated":
+        value, held = value.slice.elts
+        metadata = {_unquoted(item.key.spelling): (_unquoted(item.value.spelling) if isinstance(item.value, Py.Constant) else
+                                                   [_unquoted(e.spelling) for e in item.value.elts]) for item in held.items}
+    nodes = _branches(value)
+    names = metadata.get("branches", [_named_convention(node) for node in nodes])
+    builder = S.OfUnion.Builder(_named(schemas, name, module)).branches(
+        *[lambda q, f=f, node=node: q.name(f).of(_type(schemas, node, f"{name}.{f}", module))
+          for f, node in zip(names, nodes)]).flat()
+    if "description" in metadata:
+        builder = builder.description(metadata["description"])
+    builder.update()
+
+
+_ALIASED = P.Exists(lambda q: q.symbols({"t": S.OfUnion.Schema, "nm": Py.Name.Schema}).requires(
+    P.Contains(al.children, lambda e: e.property == "name" and e.child == nm)).requires(
+    P.Contains(nm.children, lambda e: e.property == "id" and e.child.spelling == t.name)).requires(t.has("branches")))
+FlatUnion = T.Transform("FlatUnion", _over({"al": Py.TypeAlias.Schema}, al.has("kind")),
+                        _over({"al": Py.TypeAlias.Schema}, _ALIASED), rewrite=_read_alias)
+"""A type alias of the module as a flat union: a branch per type of `A | B | ...`, named after it, or as its
+`Annotated` metadata says."""
+
 Schema = T.Transform("Schema", _over({"c": Py.ClassDef.Schema}, _DECORATED),
                      _over({"c": Py.ClassDef.Schema}, _HAS_SCHEMA), rewrite=_read_class)
 """A dataclass of the module as an object schema, or an entry class (with `LINKS`) as a relation."""
 
-TO_PYTHON = (Dataclass, Entry, Union, Intersection)
-FROM_PYTHON = (Schema,)
+TO_PYTHON = (Dataclass, Entry, Union, Intersection, Alias)
+FROM_PYTHON = (Schema, FlatUnion)
 PLAIN = T.Policy(T.Clause("Dataclass", {"frozen": False}), T.Clause("Entry"), T.Clause("Union", {"frozen": False}),
-                 T.Clause("Intersection", {"frozen": False}))
+                 T.Clause("Intersection", {"frozen": False}), T.Clause("Alias"))
 """Classes that are not frozen, and every relation's entry class."""
 
 
@@ -636,7 +781,7 @@ def read(module: Py.Module, schemas: Stores.Store | None = None) -> T.Session:
     """A session that reads the dataclasses of `module` as schemas registered in `schemas` (a new store if none), run to
     the end."""
     session = T.Session(store(Proxies.OfStore() if schemas is None else schemas, module), list(FROM_PYTHON))
-    session.run(T.Policy(T.Clause("Schema")))
+    session.run(T.Policy(T.Clause("Schema"), T.Clause("FlatUnion")))
     return session
 
 
@@ -644,7 +789,7 @@ def missing(session: T.Session) -> list[Any]:
     """The object schemas, unions, intersections and relations of a generation's store that no class renders, each kind
     in name order: those `Dataclass`, `Union`, `Intersection` or `Entry` does not render (see their befores), whose names
     a field may still name (completeness, which mbse-patterns plans in general)."""
-    classes = {statement.name.spelling for statement in _module(session.store).body if isinstance(statement, Py.ClassDef)}
+    classes = {_defined(statement) for statement in _module(session.store).body}
     return [schema for kind in ("Schemas.Object", "Schemas.Union", "Schemas.Intersection", "Schemas.Relation")
             for schema in session.store.extent(kind) if schema.name not in classes]
 
