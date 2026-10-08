@@ -128,7 +128,8 @@ check(proxy.items.map((entry: any) => entry.since).join() === "2020", "proxies")
    `flat` in the schema, a union is a type alias of its branches' types (`type Channel = Call | Mail`, `Alias`), and an
    intersection a class of its parts' properties (`PARTS` says whose), as flat proxies read them. A named native or
    list is a type alias of what it holds (`type Word = str`, `type Names = list[Word]`, `NativeAlias`, `ListAlias`),
-   which a field names; `AliasSchema` reads any alias back.
+   which a field names; `AliasSchema` reads any alias back. What an annotation cannot say is `Annotated` metadata: a
+   width (`Annotated[int, {"bits": 32}]`), an extent (`{"minimum": 1, "maximum": 3}`), a native's own description.
    `Types.missing(session)` lists the object schemas left without a class.
 3. **What reads back.** A `@dataclass` class (`@dataclass(...)` too) whose annotations are written as `Dataclass`
    writes them, `| None` or not; anything else raises `ValueError` naming the field. Reading registers the schemas in

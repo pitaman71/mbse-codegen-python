@@ -43,6 +43,7 @@
 
 import { Expressions as E } from "@mbse/expressions";
 import { Predicates as P, Transforms as T } from "@mbse/patterns";
+import { Syntax as Trees } from "@mbse/programs/Framework";
 import { Python312, Syntax as Py } from "@mbse/programs/Python";
 import { Bindings, Proxies, Reflection, Schemas as S, Stores } from "@mbse/schemas/Framework";
 import { ValueError } from "@mbse/schemas/Framework/Errors";
@@ -113,11 +114,16 @@ const [s, c, n, k, t, p, x, r, a, b, u, y, w, d] = ["s", "c", "n", "k", "t", "p"
   .map((named) => E.variable(named)) as [E.Writer, E.Writer, E.Writer, E.Writer, E.Writer, E.Writer, E.Writer, E.Writer,
     E.Writer, E.Writer, E.Writer, E.Writer, E.Writer, E.Writer];
 
-/** A basic native, as Python writes it: without a width, parameters or a description, which `int` cannot hold. */
+/** A basic native, as Python writes it, its width and description in `Annotated` metadata: one without parameters or
+ * a width that is a term, which wait on parameters' Python form. */
 function basic(type: E.Writer): E.Writer {
   const native = type.get("native");
-  return native.get("format").eq("basic").and_(native.has("bits").not_()).and_(native.has("bytes").not_()).and_(
-    native.has("terms").not_()).and_(native.has("parameters").not_()).and_(native.has("description").not_());
+  return native.get("format").eq("basic").and_(native.has("terms").not_()).and_(native.has("parameters").not_());
+}
+
+/** Whether a list's extent, if it has one, is of int bounds, which `Annotated` metadata holds. */
+function bounded(indexed: E.Writer): E.Writer {
+  return indexed.has("extent").not_().or_(indexed.get("extent").has("terms").not_());
 }
 
 /** A basic native, or a named schema of a kind that a class or an alias renders: an object schema, a union, an
@@ -135,10 +141,10 @@ function keyRenders(type: E.Writer): E.Writer {
   return basic(type).or_(E.operation("and", type.has("named"), named as never));
 }
 
-/** Whether `Dataclass` renders a type `t`: a simple one, or a list without an extent of one it renders, positional or
- * keyed by a native, basic or named, nested to any depth. It applies itself to the list's item. */
+/** Whether `Dataclass` renders a type `t`: a simple one, or a list of one it renders, its extent if any of int bounds,
+ * positional or keyed by a native, basic or named, nested to any depth. It applies itself to the list's item. */
 export const Rendered = new P.OfPredicate.Builder().name("Codegen.Rendered").parameters((q) => q.name("t")).create();
-new P.OfPredicate.Builder(Rendered).requires(simple(t).or_(t.has("indexed").and_(t.get("indexed").has("extent").not_()).and_(
+new P.OfPredicate.Builder(Rendered).requires(simple(t).or_(t.has("indexed").and_(bounded(t.get("indexed"))).and_(
   t.get("indexed").has("key").not_().or_(keyRenders(t.get("indexed").get("key")))).and_(
   Rendered.call(t.get("indexed").get("item")) as never))).update();
 
@@ -179,7 +185,27 @@ function name(builder: any, spelling: string): any {
 
 /** The annotation of a type `Dataclass` renders. */
 function annotation(type: any): (b: any) => any {
-  return type.name !== null ? (b) => name(b, type.name) : structureAnnotation(type);
+  return type.name !== null ? (b) => name(b, type.name) : annotated(structureAnnotation(type), facets(type));
+}
+
+/** What a native's or a list's annotation cannot say, as `Annotated` metadata: a native's width in bits or bytes, a
+ * list's extent, its `minimum` and its `maximum` where it has one, and its description. */
+function facets(type: any): Record<string, MetadataValue> {
+  const found: Record<string, MetadataValue> = {};
+  if (type instanceof S.OfNative.Data) {
+    for (const unit of ["bits", "bytes"]) if ((type as any)[unit] !== null) found[unit] = (type as any)[unit];
+  } else if (type instanceof S.OfIndexed.Data && type.extent !== null) {
+    found["minimum"] = type.extent.minimum as bigint;
+    if (type.extent.maximum !== null) found["maximum"] = type.extent.maximum as bigint;
+  }
+  if (type.description !== null) found["description"] = type.description;
+  return found;
+}
+
+/** `held`, or `Annotated[held, {...}]` where there are facets. */
+function annotated(held: (b: any) => any, found: Record<string, MetadataValue>): (b: any) => any {
+  return Object.keys(found).length === 0 ? held : (b: any) => b.Subscript().value((x: any) => name(x, "Annotated")).slice(
+    (x: any) => x.Tuple().add_elts(held).add_elts(metadataLiteral(found)));
 }
 
 /** The annotation of what a type holds, its name aside: a native's, or a list's of its items. */
@@ -276,6 +302,11 @@ function optionalField(named: string, type: (b: any) => any, description: string
     defaultOf((b: any) => b.Constant().spelling("None"), description === null ? {} : { description })).create();
 }
 
+/** Imports `Annotated` where `built` uses it. */
+function annotations(module: Py.Module, built: any): void {
+  if ([...Trees.walk(built)].some((node) => node instanceof Py.Name && spelling(node) === "Annotated")) require(module, "typing", "Annotated");
+}
+
 /** `NAME: ClassVar[str] = "text"`. */
 function classText(named: string, text: string): any {
   return (Py.LANGUAGE.Builders as any).AnnAssign().target((b: any) => name(b, named)).annotation(
@@ -283,11 +314,12 @@ function classText(named: string, text: string): any {
     (b: any) => b.Constant().spelling(quoted(text))).create();
 }
 
-/** Places a class in the module, with the imports it needs: `dataclass`, `field` and `ClassVar` where it uses them;
- * what the step wrote, by role: the class. */
+/** Places a class in the module, with the imports it needs: `dataclass`, `field`, `ClassVar` and `Annotated` where
+ * it uses them; what the step wrote, by role: the class. */
 function finish(store: Stores.Combined, built: any): Map<string, unknown> {
   const module = moduleOf(store);
   require(module, "dataclasses", "dataclass");
+  annotations(module, built);
   const assigned = (built.body as any[]).filter((statement) => statement instanceof Py.AnnAssign);
   if (assigned.some((statement) => statement.value instanceof Py.Call)) require(module, "dataclasses", "field");
   if (assigned.some((statement) => statement.annotation instanceof Py.Subscript && spelling(statement.annotation.value) === "ClassVar")) {
@@ -400,11 +432,12 @@ function snakeCase(named: string): string {
   return named.replace(/(?<!^)(?=[A-Z])/g, "_").toLowerCase();
 }
 
-type MetadataValue = string | MetadataValue[] | { [key: string]: MetadataValue };
+type MetadataValue = string | bigint | MetadataValue[] | { [key: string]: MetadataValue };
 
 /** A dict literal of text, lists of text and dicts of them. */
 function metadataLiteral(value: MetadataValue): (b: any) => any {
   if (typeof value === "string") return (b) => b.Constant().spelling(quoted(value));
+  if (typeof value === "bigint") return (b) => b.Constant().spelling(String(value));
   if (Array.isArray(value)) return (b) => value.reduce((built: any, item) => built.add_elts(metadataLiteral(item)), b.List());
   return (b) => Object.entries(value).reduce((built: any, [key, item]) => built.add_items(
     (i: any) => i.key(metadataLiteral(key)).value(metadataLiteral(item))), b.Dict());
@@ -422,12 +455,9 @@ function renderAlias(store: Stores.Combined, match: Record<string, unknown>): Ma
   const described = Object.fromEntries((schema.branches as any[]).filter((branch) => branch.description !== null)
     .map((branch) => [branch.name, branch.description]));
   if (Object.keys(described).length > 0) metadata["descriptions"] = described;
-  const hasMetadata = Object.keys(metadata).length > 0;
-  const value = !hasMetadata ? union : (b: any) => b.Subscript().value((x: any) => name(x, "Annotated")).slice(
-    (x: any) => x.Tuple().add_elts(union).add_elts(metadataLiteral(metadata)));
   const module = moduleOf(store);
-  if (hasMetadata) require(module, "typing", "Annotated");
-  const alias = B.TypeAlias().name((b: any) => b.id(schema.name)).value(value).create();
+  const alias = B.TypeAlias().name((b: any) => b.id(schema.name)).value(annotated(union, metadata)).create();
+  annotations(module, alias);
   place(module, alias);
   return new Map([["alias", alias]]);
 }
@@ -491,16 +521,14 @@ const HAS_ALIAS = P.Exists((q) => q.symbols({ al: Py.TypeAlias.Schema, nm: Py.Na
 export const Alias = new T.Transform("Alias", over({ s: S.OfUnion.Schema }, variantsRenderable("union", true)),
   over({ s: S.OfUnion.Schema }, HAS_ALIAS), { rewrite: renderAlias as never });
 
-/** A named native or list as a type alias of what it holds, its description, where it has one, in `Annotated`
- * metadata. */
+/** A named native or list as a type alias of what it holds, what that annotation cannot say (a width, an extent, a
+ * description) in `Annotated` metadata. */
 function renderNamed(store: Stores.Combined, match: Record<string, unknown>): Map<string, unknown> {
   const schema = match["s"] as any;
-  const held = structureAnnotation(schema);
-  const value = schema.description === null ? held : (b: any) => b.Subscript().value((x: any) => name(x, "Annotated")).slice(
-    (x: any) => x.Tuple().add_elts(held).add_elts(metadataLiteral({ description: schema.description })));
   const module = moduleOf(store);
-  if (schema.description !== null) require(module, "typing", "Annotated");
-  const alias = (Py.LANGUAGE.Builders as any).TypeAlias().name((b: any) => b.id(schema.name)).value(value).create();
+  const alias = (Py.LANGUAGE.Builders as any).TypeAlias().name((b: any) => b.id(schema.name)).value(
+    annotated(structureAnnotation(schema), facets(schema))).create();
+  annotations(module, alias);
   place(module, alias);
   return new Map([["alias", alias]]);
 }
@@ -508,10 +536,10 @@ function renderNamed(store: Stores.Combined, match: Record<string, unknown>): Ma
 const NAMED = s.has("name").and_(s.has("parameters").not_());
 /** A named basic native as a type alias of Python's type for it (`type Word = str`), as a proxy reads its value. */
 export const NativeAlias = new T.Transform("NativeAlias", over({ s: S.OfNative.Schema as any }, NAMED.and_(s.get("format").eq("basic")).and_(
-  s.has("bits").not_()).and_(s.has("bytes").not_()).and_(s.has("terms").not_())),
+  s.has("terms").not_())),
   over({ s: S.OfNative.Schema as any }, HAS_ALIAS), { rewrite: renderNamed as never });
 /** A named list as a type alias of `list[T]` or `dict[K, T]` (`type Names = list[str]`), as a proxy reads its value. */
-export const ListAlias = new T.Transform("ListAlias", over({ s: S.OfIndexed.Schema as any }, NAMED.and_(s.has("extent").not_()).and_(
+export const ListAlias = new T.Transform("ListAlias", over({ s: S.OfIndexed.Schema as any }, NAMED.and_(bounded(s)).and_(
   s.has("key").not_().or_(keyRenders(s.get("key")))).and_(rendered(s.get("item")))),
   over({ s: S.OfIndexed.Schema as any }, HAS_ALIAS), { rewrite: renderNamed as never });
 
@@ -567,6 +595,10 @@ function spelling(node: any): string {
 
 /** The type an annotation `Dataclass` writes names: a basic native, a named schema, or a list or dict of them. */
 function typeOf(schemas: Stores.Store, node: any, where: string, module: Py.Module): any {
+  if (node instanceof Py.Subscript && node.value instanceof Py.Name && spelling(node.value) === "Annotated") {
+    const [held, found] = (node.slice as any).elts;
+    return faceted(typeOf(schemas, held, where, module), literal(found)).update();
+  }
   if (node instanceof Py.Name) {
     const named = spelling(node);
     return NATIVES.includes(named) ? S.OfNative.resolve((x) => x.token("basic", named)) : registered(schemas, named, module, where);
@@ -633,8 +665,21 @@ function aliasSchema(schemas: Stores.Store, module: Py.Module, named: string, al
   let builder: any = native ? new S.OfNative.Builder().name(named).token(held.token.format, held.token.name)
     : new S.OfIndexed.Builder().name(named).of(held.item);
   if (!native && held.key !== null) builder = builder.key(held.key);
-  (schemas as any).register(withDescription(builder, metadata["description"]).create());
+  (schemas as any).register(faceted(builder.create(), metadata).update());
   return schemas.registered(named);
+}
+
+/** A builder of the native or list `type` with the facets `Annotated` metadata gives it (see `facets`). */
+function faceted(type: any, found: Record<string, any>): any {
+  let builder: any;
+  if (type instanceof S.OfNative.Data) {
+    builder = new S.OfNative.Builder(type);
+    for (const unit of ["bits", "bytes"]) if (found[unit] !== undefined) builder = builder[unit](found[unit]);
+  } else {
+    builder = new S.OfIndexed.Builder(type);
+    if (found["minimum"] !== undefined) builder = builder.extent({ minimum: found["minimum"], maximum: found["maximum"] ?? null });
+  }
+  return withDescription(builder, found["description"]);
 }
 
 /** `T` of `T | None`. */
@@ -660,11 +705,12 @@ function keywords(node: any): Map<string, string> {
 }
 
 /** The values of a class's `ClassVar`s, by name: tuples of text, or of tuples of text. */
-/** The value of a literal the steps write: text, or a tuple, list or dict of literals. */
+/** The value of a literal the steps write: text, an int, or a tuple, list or dict of literals. */
 function literal(node: any): any {
   const inner = node instanceof Py.Parenthesized ? node.value : node;
   if (inner instanceof Py.Dict) return Object.fromEntries(inner.items.map((item: any) => [literal(item.key), literal(item.value)]));
-  return inner instanceof Py.Tuple || inner instanceof Py.List ? inner.elts.map(literal) : unquoted(inner.spelling);
+  if (inner instanceof Py.Tuple || inner instanceof Py.List) return inner.elts.map(literal);
+  return `'"`.includes(inner.spelling[0]) ? unquoted(inner.spelling) : BigInt(inner.spelling);
 }
 
 /** A field's metadata: `field(..., metadata={...})`'s, or none. */
@@ -819,6 +865,7 @@ function branchesOf(node: any): any[] {
 
 /** The name a branch has unless its alias says otherwise, from its annotation, as `convention` from its type. */
 function namedConvention(node: any): string {
+  if (node instanceof Py.Subscript && node.value instanceof Py.Name && spelling(node.value) === "Annotated") return namedConvention((node.slice as any).elts[0]);
   const named = spelling(node instanceof Py.Subscript ? node.value : node);
   return NATIVES.includes(named) || node instanceof Py.Subscript ? named : snakeCase(named);
 }

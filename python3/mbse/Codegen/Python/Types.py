@@ -49,6 +49,7 @@ from typing import Any
 
 from mbse.Expressions import Expressions as E
 from mbse.Patterns import Predicates as P, Transforms as T
+from mbse.Programs.Framework import Syntax as Trees
 from mbse.Programs.Python import Python312, Syntax as Py
 from mbse.Schemas.Framework import Bindings, Proxies, Reflection, Schemas as S, Stores
 
@@ -120,10 +121,15 @@ s, c, n, k, t, p, x, r, a, b, u, y, w, d = (E.variable(name) for name in (
 
 
 def _basic(type_: E.Writer) -> E.Writer:
-    """A basic native, as Python writes it: without a width, parameters or a description, which `int` cannot hold."""
+    """A basic native, as Python writes it, its width and description in `Annotated` metadata: one without parameters or
+    a width that is a term, which wait on parameters' Python form."""
     native = type_.get("native")
-    return native.get("format").eq("basic").and_(native.has("bits").not_()).and_(native.has("bytes").not_()).and_(
-        native.has("terms").not_()).and_(native.has("parameters").not_()).and_(native.has("description").not_())
+    return native.get("format").eq("basic").and_(native.has("terms").not_()).and_(native.has("parameters").not_())
+
+
+def _bounded(indexed: E.Writer) -> E.Writer:
+    """Whether a list's extent, if it has one, is of int bounds, which `Annotated` metadata holds."""
+    return indexed.has("extent").not_().or_(indexed.get("extent").has("terms").not_())
 
 
 def _simple(type_: E.Writer) -> E.Writer:
@@ -142,9 +148,9 @@ def _key(type_: E.Writer) -> E.Writer:
 
 
 Rendered = P.OfPredicate.Builder().name("Codegen.Rendered").parameters(lambda q: q.name("t")).create()
-"""Whether `Dataclass` renders a type `t`: a simple one, or a list without an extent of one it renders, positional or
-keyed by a native, basic or named, nested to any depth. It applies itself to the list's item."""
-P.OfPredicate.Builder(Rendered).requires(_simple(t).or_(t.has("indexed").and_(t.get("indexed").has("extent").not_()).and_(
+"""Whether `Dataclass` renders a type `t`: a simple one, or a list of one it renders, its extent if any of int bounds,
+positional or keyed by a native, basic or named, nested to any depth. It applies itself to the list's item."""
+P.OfPredicate.Builder(Rendered).requires(_simple(t).or_(t.has("indexed").and_(_bounded(t.get("indexed"))).and_(
     t.get("indexed").has("key").not_().or_(_key(t.get("indexed").get("key")))).and_(
     Rendered(t.get("indexed").get("item"))))).update()
 
@@ -187,8 +193,30 @@ def _name(builder: Any, spelling: str) -> Any:
 
 
 def _annotation(type_: Any) -> Any:
-    """The annotation of a type `Dataclass` renders: a named schema by its name."""
-    return (lambda b: _name(b, type_.name)) if type_.name is not None else _structure_annotation(type_)
+    """The annotation of a type `Dataclass` renders: a named schema by its name, or what it holds, in `Annotated` with
+    what that annotation cannot say."""
+    return (lambda b: _name(b, type_.name)) if type_.name is not None else _annotated(_structure_annotation(type_), _facets(type_))
+
+
+def _facets(type_: Any) -> dict[str, Any]:
+    """What a native's or a list's annotation cannot say, as `Annotated` metadata: a native's width in bits or bytes, a
+    list's extent, its `minimum` and its `maximum` where it has one, and its description."""
+    facets: dict[str, Any] = {}
+    if isinstance(type_, S.OfNative.Data):
+        facets.update({unit: width for unit, width in (("bits", type_.bits), ("bytes", type_.bytes)) if width is not None})
+    elif isinstance(type_, S.OfIndexed.Data) and type_.extent is not None:
+        facets["minimum"] = type_.extent.minimum
+        if type_.extent.maximum is not None:
+            facets["maximum"] = type_.extent.maximum
+    if type_.description is not None:
+        facets["description"] = type_.description
+    return facets
+
+
+def _annotated(held: Any, facets: dict[str, Any]) -> Any:
+    """`held`, or `Annotated[held, {...}]` where there are facets."""
+    return held if not facets else lambda b: b.Subscript().value(lambda x: _name(x, "Annotated")).slice(
+        lambda x: x.Tuple().add_elts(held).add_elts(_metadata(facets)))
 
 
 def _structure_annotation(type_: Any) -> Any:
@@ -285,6 +313,12 @@ def _optional_field(name: str, annotation: Any, description: str | None = None) 
         _default(lambda b: b.Constant().spelling("None"), {} if description is None else {"description": description})).create()
 
 
+def _annotations(module: Py.Module, built: Any) -> None:
+    """Imports `Annotated` where `built` uses it."""
+    if any(isinstance(node, Py.Name) and _spelling(node) == "Annotated" for node in Trees.walk(built)):
+        _require(module, "typing", "Annotated")
+
+
 def _class_text(name: str, text: str) -> Any:
     """`NAME: ClassVar[str] = "text"`."""
     return Py.LANGUAGE.Builders.AnnAssign().target(lambda b: _name(b, name)).annotation(
@@ -293,10 +327,11 @@ def _class_text(name: str, text: str) -> Any:
 
 
 def _finish(store: Stores.Combined, built: Any) -> dict[str, Any]:
-    """Places a class in the module, with the imports it needs: `dataclass`, `field` and `ClassVar` where it uses them;
-    what the step wrote, by role: the class."""
+    """Places a class in the module, with the imports it needs: `dataclass`, `field`, `ClassVar` and `Annotated` where it
+    uses them; what the step wrote, by role: the class."""
     module = _module(store)
     _require(module, "dataclasses", "dataclass")
+    _annotations(module, built)
     assigned = [statement for statement in built.body if isinstance(statement, Py.AnnAssign)]
     if any(isinstance(statement.value, Py.Call) for statement in assigned):
         _require(module, "dataclasses", "field")
@@ -414,10 +449,12 @@ def _snake(name: str) -> str:
 
 
 def _metadata(entries: dict[str, Any]) -> Any:
-    """A dict literal of text, lists of text and dicts of them."""
+    """A dict literal of text, ints, and lists and dicts of them."""
     def literal(value: Any) -> Any:
         if isinstance(value, str):
             return lambda b: b.Constant().spelling(_quoted(value))
+        if isinstance(value, int):
+            return lambda b: b.Constant().spelling(str(value))
         if isinstance(value, list):
             return lambda b: functools.reduce(lambda built, item: built.add_elts(literal(item)), value, b.List())
         return lambda b: functools.reduce(lambda built, item: built.add_items(
@@ -438,12 +475,9 @@ def _render_alias(store: Stores.Combined, match: dict[str, Any], arguments: dict
     described = {branch.name: branch.description for branch in schema.branches if branch.description is not None}
     if described:
         metadata["descriptions"] = described
-    value = union if not metadata else lambda b: b.Subscript().value(lambda x: _name(x, "Annotated")).slice(
-        lambda x: x.Tuple().add_elts(union).add_elts(_metadata(metadata)))
     module = _module(store)
-    if metadata:
-        _require(module, "typing", "Annotated")
-    alias = B.TypeAlias().name(lambda b: b.id(schema.name)).value(value).create()
+    alias = B.TypeAlias().name(lambda b: b.id(schema.name)).value(_annotated(union, metadata)).create()
+    _annotations(module, alias)
     _place(module, alias)
     return {"alias": alias}
 
@@ -507,26 +541,23 @@ branches' names and its description, where it has them, in `Annotated` metadata.
 
 
 def _render_named(store: Stores.Combined, match: dict[str, Any], arguments: dict[str, Any]) -> dict[str, Any]:
-    """A named native or list as a type alias of what it holds, its description, where it has one, in `Annotated`
-    metadata."""
+    """A named native or list as a type alias of what it holds, what that annotation cannot say (a width, an extent, a
+    description) in `Annotated` metadata."""
     schema = match["s"]
-    held = _structure_annotation(schema)
-    value = held if schema.description is None else lambda b: b.Subscript().value(lambda x: _name(x, "Annotated")).slice(
-        lambda x: x.Tuple().add_elts(held).add_elts(_metadata({"description": schema.description})))
     module = _module(store)
-    if schema.description is not None:
-        _require(module, "typing", "Annotated")
-    alias = Py.LANGUAGE.Builders.TypeAlias().name(lambda b: b.id(schema.name)).value(value).create()
+    alias = Py.LANGUAGE.Builders.TypeAlias().name(lambda b: b.id(schema.name)).value(
+        _annotated(_structure_annotation(schema), _facets(schema))).create()
+    _annotations(module, alias)
     _place(module, alias)
     return {"alias": alias}
 
 
 _NAMED = s.has("name").and_(s.has("parameters").not_())
 NativeAlias = T.Transform("NativeAlias", _over({"s": S.OfNative.Schema}, _NAMED.and_(s.get("format").eq("basic")).and_(
-    s.has("bits").not_()).and_(s.has("bytes").not_()).and_(s.has("terms").not_())),
+    s.has("terms").not_())),
     _over({"s": S.OfNative.Schema}, _HAS_ALIAS), rewrite=_render_named)
 """A named basic native as a type alias of Python's type for it (`type Word = str`), as a proxy reads its value."""
-ListAlias = T.Transform("ListAlias", _over({"s": S.OfIndexed.Schema}, _NAMED.and_(s.has("extent").not_()).and_(
+ListAlias = T.Transform("ListAlias", _over({"s": S.OfIndexed.Schema}, _NAMED.and_(_bounded(s)).and_(
     s.has("key").not_().or_(_key(s.get("key")))).and_(_rendered(s.get("item")))),
     _over({"s": S.OfIndexed.Schema}, _HAS_ALIAS), rewrite=_render_named)
 """A named list as a type alias of `list[T]` or `dict[K, T]` (`type Names = list[str]`), as a proxy reads its value."""
@@ -587,7 +618,11 @@ def _spelling(node: Any) -> str:
 
 
 def _type(schemas: Stores.Store, annotation: Any, where: str, module: Py.Module) -> Any:
-    """The type an annotation `Dataclass` writes names: a basic native, a named schema, or a list or dict of them."""
+    """The type an annotation `Dataclass` writes names: a basic native, a named schema, or a list or dict of them, in
+    `Annotated` with what their annotation cannot say."""
+    if isinstance(annotation, Py.Subscript) and isinstance(annotation.value, Py.Name) and _spelling(annotation.value) == "Annotated":
+        held, facets = annotation.slice.elts[0], _literal(annotation.slice.elts[1])
+        return _faceted(_type(schemas, held, where, module), facets).update()
     if isinstance(annotation, Py.Name):
         name = _spelling(annotation)
         return S.OfNative.Data({"bool": bool, "int": int, "float": float, "str": str, "bytes": bytes}[name]) if (
@@ -600,6 +635,18 @@ def _type(schemas: Stores.Store, annotation: Any, where: str, module: Py.Module)
         key, item = (_type(schemas, element, where, module) for element in annotation.slice.elts)
         return S.OfIndexed.Builder().key(key).of(item).create()
     raise ValueError(f"{where}: cannot read the annotation {Python312.print(annotation).strip()}")
+
+
+def _faceted(type_: Any, facets: dict[str, Any]) -> Any:
+    """A builder of the native or list `type_` with the facets `Annotated` metadata gives it (see `_facets`)."""
+    if isinstance(type_, S.OfNative.Data):
+        builder = S.OfNative.Builder(type_)
+        for unit in ("bits", "bytes"):
+            builder = getattr(builder, unit)(facets[unit]) if unit in facets else builder
+    else:
+        builder = S.OfIndexed.Builder(type_)
+        builder = builder.extent(facets["minimum"], facets.get("maximum")) if "minimum" in facets else builder
+    return _described(builder, facets.get("description"))
 
 
 def _named(schemas: Stores.Store, name: str, module: Py.Module, where: str = "") -> Any:
@@ -652,7 +699,7 @@ def _alias_schema(schemas: Stores.Store, module: Py.Module, name: str, alias: An
     builder = (S.OfNative.Builder().name(name).token(held.token.format, held.token.name) if native
                else S.OfIndexed.Builder().name(name).of(held.item))
     builder = builder.key(held.key) if not native and held.key is not None else builder
-    schemas.register(_described(builder, metadata.get("description")).create())
+    schemas.register(_faceted(builder.create(), metadata).update())
     return schemas.registered(name)
 
 
@@ -683,11 +730,13 @@ def _keywords(decorator: Any) -> dict[str, str]:
 
 
 def _literal(node: Any) -> Any:
-    """The value of a literal the steps write: text, or a tuple, list or dict of literals."""
+    """The value of a literal the steps write: text, an int, or a tuple, list or dict of literals."""
     node = node.value if isinstance(node, Py.Parenthesized) else node
     if isinstance(node, Py.Dict):
         return {_literal(item.key): _literal(item.value) for item in node.items}
-    return [_literal(item) for item in node.elts] if isinstance(node, (Py.Tuple, Py.List)) else _unquoted(node.spelling)
+    if isinstance(node, (Py.Tuple, Py.List)):
+        return [_literal(item) for item in node.elts]
+    return _unquoted(node.spelling) if node.spelling[0] in "'\"" else int(node.spelling)
 
 
 def _field_metadata(field: Any) -> dict[str, Any]:
@@ -860,6 +909,8 @@ def _branches(node: Any) -> list[Any]:
 
 def _named_convention(node: Any) -> str:
     """The name a branch has unless its alias says otherwise, from its annotation, as `_convention` from its type."""
+    if isinstance(node, Py.Subscript) and isinstance(node.value, Py.Name) and _spelling(node.value) == "Annotated":
+        return _named_convention(node.slice.elts[0])
     head = node.value if isinstance(node, Py.Subscript) else node
     name = _spelling(head)
     return name if name in NATIVES or isinstance(node, Py.Subscript) else _snake(name)

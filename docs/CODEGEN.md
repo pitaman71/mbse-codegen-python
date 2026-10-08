@@ -53,8 +53,13 @@ requires.
   or a description of its own, which Python's type cannot hold, a named
   object schema, union, intersection, native or list by its name, a positional list as `list[...]` and a list keyed by
   a native, basic or named, as `dict[K, V]`, of any of these, nested to any depth: `Types.Rendered` is a predicate that
-  applies itself to a list's item (mbse-patterns 0.8.2). An inline list with an extent has no Python form yet, and an
-  application none: a schema with such a property has no candidate, rather than a dataclass field that names nothing.
+  applies itself to a list's item (mbse-patterns 0.8.2). A width or an extent that is a term, a native with
+  parameters, and an application have no Python form yet: a schema with such a property has no candidate, rather than
+  a dataclass field that names nothing.
+- **What an annotation cannot say is `Annotated` metadata** (0.11): a native's width (`Annotated[int, {"bits": 32}]`),
+  a list's extent (`Annotated[list[Phone], {"minimum": 1, "maximum": 3}]`, the maximum only where it has one) and a
+  native's or a list's own description, inline or in a named one's alias (`type Byte = Annotated[int, {"bits": 8,
+  "description": "one octet"}]`). A flat union's branch so annotated is still named after its type (`int`).
 - **A named native or list is a type alias** (0.10) of what it holds, as a proxy reads its value: `type Word = str`,
   `type Names = list[Word]`, `type Tally = dict[Word, Count]`, its description in `Annotated` metadata, as a flat
   union's is. A field names it (`word: Word | None = None`); one without an alias (another format's native, a bounded
@@ -100,8 +105,8 @@ requires.
 - **Nothing is lost silently** (0.9.1). A property's, an adjacency's, a relation property's and a branch's or part's
   description is its field's metadata (`field(default=None, metadata={"description": "digits"})`, beside an
   adjacency's `"me"`); a flat union's branches' descriptions are its `Annotated` metadata's `"descriptions"`, and a
-  flat intersection's parts' its class variable `DESCRIPTIONS`, since no field holds a part. What Python's types cannot
-  hold (a native's width, a native's own description) has no class, and `missing` reports it.
+  flat intersection's parts' its class variable `DESCRIPTIONS`, since no field holds a part. What has no Python form
+  yet (a width that is a term, a native with parameters) has no class, and `missing` reports it.
 - **Classes are in name order**, wherever the steps that wrote them come in the trace, so the module does not depend
   on the order of the decisions; the imports come first, once.
 - **Names are matched by name.** After says "a class named after `s`" by its `name` child's spelling, since the
@@ -133,11 +138,12 @@ requires.
 - **Entries as a sorted set.** Any iterable holds entries; a set sorted by a comparator would serve retrieval.
 - **The older adapter.** mbse-schemas' `Adapters/Dataclasses.py` maps containers of dataclasses to relations, as
   0.5 did and 0.6 no longer does; its classes do not read as proxies. Retire it, or bring it to entry classes.
-- **Other formats and widths.** Natives of other formats (`ccpp`) and widths (bits, bytes) have no Python form yet.
+- **Other formats.** Natives of other formats (`ccpp`) have no Python form yet: which Python type stands for one is a
+  parameter (`host`), the token kept in `Annotated` metadata.
 - **Several elements in one role.** A class's step reads the native and list aliases its fields name, which a rewrite
   cannot yet return as written (one element per role): mbse-patterns could let a role hold several.
-- **Extents.** A bounded list (`.extent(0, 9)`) could be `Annotated[list[T], ...]` with a marker, or a check in
-  `__post_init__` with the constraints (`Codegen/Patterns`).
+- **Checking extents and widths.** `Annotated` metadata says them; checking them (`__post_init__`, or a validator
+  beside the classes) is Codegen/Patterns' work, with the constraints.
 - **Configuring names.** A name Python cannot spell is an error when the source is taken; a transform that offers a
   Python name as a parameter (the older adapter keeps a dotted name's last part) would let a person or a policy fix it
   within the session, recorded in the trace.

@@ -35,7 +35,8 @@ not report it, and reading back did not restore it. 0.9.1 writes and reads each,
 - an object schema's **singleton** name, now `SINGLETON`;
 - the **description** of a property, a relation's property, a branch or a part, and an adjacency, now field metadata
   (and, where no field holds it, `Annotated` metadata or `DESCRIPTIONS`);
-- a native's **width** or its own description, which `int` cannot hold: now no class, reported by `missing`.
+- a native's **width** or its own description, which `int` cannot hold: no class in 0.9.1, reported by `missing`, and
+  `Annotated` metadata since 0.11.
 
 ## Natives
 
@@ -44,7 +45,8 @@ not report it, and reading back did not restore it. 0.9.1 writes and reads each,
 | Basic native (`bool`, `int`, `float`, `str`, `bytes`) | Python's own type | none | built |
 | `python3` token of a basic native | the same type; reads back as `basic` | none (both tokens map to one host type) | feasible: it is refused today. Reading back cannot tell the two apart, so the format would go in metadata |
 | Native of another format (`ccpp` `int32_t`, `typescript5` `number`) | a basic Python type, the token kept in metadata: `Annotated[int, {"native": ["ccpp", "int32_t"]}]` | `host`: which basic type. A policy may hold a table of them | feasible |
-| Width in bits or bytes, an int | metadata: `Annotated[int, {"bits": 32}]` | none | feasible: no class today (was lost until 0.9.1) |
+| Width in bits or bytes, an int | metadata: `Annotated[int, {"bits": 32}]` | none | built (0.11) |
+| A native's own description | metadata: `Annotated[int, {"description": "a count"}]` | none | built (0.11) |
 | Width as a term | the term, rendered by `Codegen/Expressions` | | waits on Codegen/Expressions |
 | Named native (`Word`) | `type Word = str`, its description in `Annotated` metadata | none: a `NewType` was considered, but it cannot hold the `Annotated` metadata, and a proxy's value is the plain `str` anyway | built (0.10) |
 
@@ -92,7 +94,7 @@ not report it, and reading back did not restore it. 0.9.1 writes and reads each,
 | Positional list | `list[T]` | none | built |
 | Keyed by a basic native | `dict[K, V]` | none | built |
 | Keyed by a value object, union or intersection | `dict[K, V]` | none, but K's class must be hashable, so K's step must take `frozen=True`: a constraint between two steps | feasible |
-| Extent with int bounds | `Annotated[list[T], {"extent": [0, 9]}]` | none: a fixed `tuple[T, T, T]` was considered, but an extent bounds a list's keys, not how many items it holds | feasible |
+| Extent with int bounds | `Annotated[list[T], {"minimum": 0, "maximum": 9}]`, the maximum only where it has one | none: a fixed `tuple[T, T, T]` was considered, but an extent bounds a list's keys, not how many items it holds | built (0.11) |
 | Extent with a term | the term, rendered by `Codegen/Expressions` | | waits on Codegen/Expressions |
 | Named list (`Names`) | `type Names = list[str]`, a dict keyed by a named native too | none | built (0.10) |
 | Lists nested to any depth | as above | none | built (0.9): `Types.Rendered` applies itself to the item, replacing `DEPTH`, which unrolled the check four deep |
@@ -130,8 +132,8 @@ not report it, and reading back did not restore it. 0.9.1 writes and reads each,
    without a class.
 3. **Target links in the trace** (mbse-patterns 0.9, codegen 0.9.2, done): each step links the elements it matched
    and wrote, by role, as relations whose entries hold their paths.
-4. The deterministic rows without parameters: named natives and lists as aliases (0.10, done), widths, extents with int bounds,
-   `python3` tokens.
+4. The deterministic rows without parameters: named natives and lists as aliases (0.10, done), widths, natives' own
+   descriptions and extents with int bounds (0.11, done), `python3` tokens.
 5. The rows with a parameter: other formats' natives (`host`), inline schemas (`name`), keys of schemas (`frozen`
    coupling), the adjacency `container`, dotted names (`layout`), the rename step.
 6. Bindings (`bound`).
