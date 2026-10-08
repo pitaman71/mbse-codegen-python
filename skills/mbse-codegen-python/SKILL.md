@@ -121,7 +121,9 @@ check(proxy.items.map((entry: any) => entry.since).join() === "2020", "proxies")
    = None`. Classes are in name order. A relation is the class of its entries (`Entry`): a field per link, typed by the classes that declare it, then
    its properties, with class variables `LINKS` and `UNIQUES`; each adjacency, on both ends, is one field named after it
    holding its entries (`phones: tuple[Phones, ...] = ()`), so code reads proxies and generated classes alike
-   (`for entry in contact.phones: entry.phone.number`). `Types.missing(session)` lists the object schemas left without a class.
+   (`for entry in contact.phones: entry.phone.number`). A named union or intersection is a value class of a dataclass
+   field per branch or part (`KIND` says which), read as proxies read union values (`card.reach.email`).
+   `Types.missing(session)` lists the object schemas left without a class.
 3. **What reads back.** A `@dataclass` class (`@dataclass(...)` too) whose annotations are written as `Dataclass`
    writes them, `| None` or not; anything else raises `ValueError` naming the field. Reading registers the schemas in
    the store given, and fills a schema a field names when its class is read.

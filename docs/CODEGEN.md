@@ -36,6 +36,8 @@ requires.
 | Transform | Symbols | Before | After | Parameters |
 |---|---|---|---|---|
 | `Dataclass` | `s`: `Schemas.OfObject.Schema` | `s` is named, declares no parameters, every property's type renders, and every adjacency is to a named relation | the module has a class named after `s` | `frozen`: `bool` |
+| `Union` | `s`: `Schemas.OfUnion.Schema` | `s` is named, declares no parameters, has branches, and every branch's type renders | the module has a class named after `s` | `frozen`: `bool` |
+| `Intersection` | `s`: `Schemas.OfIntersection.Schema` | `s` is named, declares no parameters, has parts, and every part's type renders | the module has a class named after `s` | `frozen`: `bool` |
 | `Entry` | `r`: `Schemas.OfRelation.Schema` | `r` is named, declares no parameters, every property's type renders, and every link is declared by an object schema | the module has a class named after `r` | none |
 | `Schema` | `c`: `Programs.Python.ClassDef` | `c` is decorated `@dataclass` or `@dataclass(...)` | a relation named after `c` has its links, or an object schema named after `c` has a property or adjacency per field, is `ref` where `c` is `eq=False`, and is described where `c` has a docstring | none |
 
@@ -44,10 +46,10 @@ requires.
   (`s.get("properties").all(...)`) and compared deeply (mbse-expressions' Basic). A decision about one property, when
   there is one to take, will be a parameter of the schema's step.
 - **What renders**: a basic native as Python's name for it (`str`, `int`, `float`, `bool`, `bytes`), a named
-  object schema by its name, a positional list as `list[...]` and a list keyed by a basic native as `dict[K, V]`, of
-  any of these, nested four deep at most (`DEPTH`). A list with an extent has no Python form yet, and a named schema of
-  another kind (a named native, union, intersection or application) no class: a schema with such a property has no
-  candidate, rather than a field that names nothing.
+  object schema, union or intersection by its name, a positional list as `list[...]` and a list keyed by a basic
+  native as `dict[K, V]`, of any of these, nested four deep at most (`DEPTH`). A list with an extent has no Python form
+  yet, and a named native or application no class: a schema with such a property has no candidate, rather than a
+  dataclass field that names nothing.
 - **Names are written as the schemas have them**, so that a step can still configure them; a name Python cannot spell
   (not an identifier, or a keyword) is a problem of the module, which mbse-programs' validation reports by path
   (`Types.problems(session)`), and taking the source (`Types.text(session)`) with any left is a `ValueError` listing
@@ -95,8 +97,10 @@ requires.
 
 ## Open questions
 
-- **Unions and intersections.** A union value names its branch, which `A | B` cannot say; a faithful rendering is a
-  class per union with a field per branch, or a tagged union. Which, or a parameter to choose?
+- **Flat unions and intersections** (planned: mbse-schemas 0.9, codegen 0.8). A union or intersection schema
+  configured `flat` reads, on proxies and generated classes alike, as Python's own forms: a union value is its branch's
+  value (`Phone | str`, told apart by type), an intersection's parts' properties are its own. Its branches must be
+  distinguishable by runtime type, and its parts' properties must not collide; the wire form stays tagged.
 - **Model parameters.** A parametric schema as a generic dataclass (`class Matrix[T]`) needs type parameters, which
   mbse-schemas has not built yet; value parameters (an extent's bound) have no Python construct.
 - **Runtime bindings.** The generated classes hold relations as containers, but are not bound to a store: generating
@@ -123,6 +127,9 @@ requires.
 - Relations render as entry classes, and adjacencies as fields holding entries, on both ends (0.6), so that generated
   classes read as mbse-schemas' proxies do (0.8.3) and code works on either without change. It replaces 0.5's
   container fields (the older adapter's mapping), which hid the entries and differed from proxies.
+- Unions and intersections render as value classes of a dataclass field per branch or part (0.7), as proxies read
+  union and intersection values, the default form; `KIND` says which on the way back. Reading back never makes up a
+  schema: a name that is neither a class of the module nor a schema of the store is refused.
 - Names Python cannot spell are written as they are, flagged by mbse-programs' validation (which already holds any
   spelling and flags those), and an error only when the source is taken (0.4), so that a step may still configure
   them. Keyed lists and nested lists render, as mbse-schemas' older Python adapter

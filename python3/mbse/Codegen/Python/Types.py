@@ -11,13 +11,17 @@ singleton `Codegen.Output` holds the module written or read. Each step is one de
   keyed by a basic native, nested `DEPTH` deep) and every adjacency is to a named relation. A reference object schema
   compares by identity (`eq=False`), and a schema's description is the class's docstring. Where a schema declares
   adjacencies via several links of one relation (a self-relation), each field's metadata names its link (`"me"`).
+- `Union` and `Intersection` render a named union or intersection as a value class of a dataclass field per branch or
+  part, each optional, as a proxy's union or intersection value reads it (`card.reach.email`); its class variable
+  `KIND` (`"union"`, `"intersection"`) says which. Their parameter `frozen` is the decision, as `Dataclass`'s.
 - `Entry` renders a relation as the class of its entries, named after it: a field per link, typed by the object schemas
   that declare an adjacency via it (`Pager | Phone`), then one per property, and class variables `LINKS` and `UNIQUES`.
   An entry is shared by the objects it links, as mbse-schemas' proxies share theirs, so code reads an adjacency and its
   entries alike from proxies and generated classes (`for entry in contact.phones: entry.phone.number`).
-- `Schema` reads a `@dataclass` class `c` of the module back: an entry class (with `LINKS`) as a relation, any other as
-  an object schema, registered in the schemas' store; a class a field names before its own step is registered empty,
-  and filled by that step. A field's annotation is read as `Dataclass` and `Entry` write one, and any other is refused.
+- `Schema` reads a `@dataclass` class `c` of the module back: an entry class (with `LINKS`) as a relation, a class with
+  `KIND` as a union or an intersection, any other as an object schema, registered in the schemas' store; a class of the
+  module a dataclass field names before its own step is registered empty, and filled by that step, and a name that is
+  neither a class of the module nor a schema of the store is refused. A field's annotation is read as `Dataclass` and `Entry` write one, and any other is refused.
 
 `generate(schemas, policy, earlier)` and `read(module, schemas)` run each to the end. `frozen` is the one thing a schema
 does not hold: reading code back loses it, and the trace of the generation keeps it. A generation given the steps of an
@@ -38,7 +42,8 @@ from mbse.Patterns import Predicates as P, Transforms as T
 from mbse.Programs.Python import Python312, Syntax as Py
 from mbse.Schemas.Framework import Bindings, Proxies, Reflection, Schemas as S, Stores
 
-__all__ = ["OUTPUT", "NATIVES", "KEYWORDS", "DEPTH", "Output", "Generated", "store", "Dataclass", "Schema", "TO_PYTHON",
+__all__ = ["OUTPUT", "NATIVES", "KEYWORDS", "DEPTH", "Output", "Generated", "store", "Dataclass", "Entry", "Union",
+           "Intersection", "Schema", "TO_PYTHON",
            "FROM_PYTHON", "PLAIN", "missing", "problems",
            "generate", "read", "text"]
 
@@ -111,10 +116,11 @@ def _basic(type_: E.Writer) -> E.Writer:
 
 
 def _simple(type_: E.Writer) -> E.Writer:
-    """A basic native, or a named object schema."""
-    named = P.Exists(lambda q: q.symbols({"x": S.OfObject.Schema}).requires(
-        x.get("name").eq(type_.get("named").get("name"))))
-    return _basic(type_).or_(E.operation("and", type_.has("named"), named))
+    """A basic native, or a named object schema, union or intersection: each a class."""
+    named = [P.Exists(lambda q, meta=meta: q.symbols({"x": meta}).requires(x.get("name").eq(type_.get("named").get("name"))))
+             for meta in (S.OfObject.Schema, S.OfUnion.Schema, S.OfIntersection.Schema)]
+    return _basic(type_).or_(E.operation("and", type_.has("named"), E.operation("or", named[0], E.operation(
+        "or", named[1], named[2]))))
 
 
 def _rendered(type_: E.Writer, depth: int = DEPTH) -> E.Writer:
@@ -202,7 +208,8 @@ def _require(module: Py.Module, source: str, name: str) -> None:
 
 
 def _decorator(schema: Any, frozen: bool) -> Any:
-    keywords = [(name, "False" if name == "eq" else "True") for name, on in (("eq", schema.ref), ("frozen", frozen)) if on]
+    keywords = [(name, "False" if name == "eq" else "True") for name, on in (
+        ("eq", getattr(schema, "ref", False)), ("frozen", frozen)) if on]  # a union or intersection is a value
     if not keywords:
         return lambda b: _name(b, "dataclass")
     return lambda b: functools.reduce(
@@ -323,6 +330,48 @@ Entry = T.Transform(
 """A relation as the class of its entries: a field per link, typed by the object schemas that declare it, then one per
 property, and class variables `LINKS` and `UNIQUES` that say which fields are links and what is unique."""
 
+_MEMBERS = {"union": "branches", "intersection": "parts"}
+"""Where a union's and an intersection's members are, in their module form and their data."""
+
+
+def _variants_renderable(kind: str) -> Any:
+    members = _MEMBERS[kind]
+    return s.has("name").and_(s.has("parameters").not_()).and_(s.has(members)).and_(
+        s.get(members).all("p", _rendered(p.get("type"))))
+
+
+def _render_variants(kind: str) -> Any:
+    def render(store: Stores.Combined, match: dict[str, Any], arguments: dict[str, Any]) -> None:
+        schema = match["s"]
+        B = Py.LANGUAGE.Builders
+        members = getattr(schema, _MEMBERS[kind])
+        body = _docstring(schema.description) + [Py.LANGUAGE.Builders.AnnAssign().target(lambda b: _name(b, "KIND")).annotation(
+            lambda b: b.Subscript().value(lambda x: _name(x, "ClassVar")).slice(lambda x: _name(x, "str"))).value(
+            lambda b: b.Constant().spelling(_quoted(kind))).create()]
+        body += [_optional_field(member.name, _annotation(member.type)) for member in members]
+        built = B.ClassDef().name(schema.name).add_decorator_list(_decorator(schema, arguments["frozen"])).create()
+        built.body = body
+        module = _module(store)
+        _require(module, "dataclasses", "dataclass")
+        _require(module, "typing", "ClassVar")
+        _place(module, built)
+    return render
+
+
+def _variants(kind: str, meta: Any) -> T.Transform:
+    return T.Transform(
+        kind.capitalize(), _over({"s": meta}, _variants_renderable(kind)), _over({"s": meta}, _HAS_CLASS),
+        [lambda q: q.name("frozen").of(lambda x: x.as_native(bool)).description("Whether the class is frozen")],
+        _render_variants(kind))
+
+
+Union = _variants("union", S.OfUnion.Schema)
+"""A named union as a class of a field per branch, of which one is set, as a proxy's union value reads it, its class
+variable `KIND` `"union"`."""
+Intersection = _variants("intersection", S.OfIntersection.Schema)
+"""A named intersection as a class of a field per part, as a proxy's intersection value reads it, its class variable
+`KIND` `"intersection"`."""
+
 # --- Classes to schemas ---
 
 _NAMED_DATACLASS = P.Contains(n.children, lambda e: e.property == "id" and e.child.spelling == "dataclass")
@@ -354,38 +403,48 @@ _HAS_SCHEMA = E.operation(
     "or", P.Exists(lambda q: q.symbols({"t": S.OfObject.Schema}).requires(
         P.Contains(c.children, lambda e: e.property == "name" and e.child.spelling == t.name)).requires(
         t.has("ref").eq(_UNEQUAL).and_(t.has("description").eq(_DOCUMENTED))).requires(_COUNTED)),
-    P.Exists(lambda q: q.symbols({"r": S.OfRelation.Schema}).requires(
+    E.operation("or", P.Exists(lambda q: q.symbols({"r": S.OfRelation.Schema}).requires(
         P.Contains(c.children, lambda e: e.property == "name" and e.child.spelling == r.name)).requires(
-        r.has("links"))))
+        r.has("links"))), E.operation("or", *[P.Exists(lambda q, meta=meta, members=members: q.symbols({"t": meta}).requires(
+            P.Contains(c.children, lambda e: e.property == "name" and e.child.spelling == t.name)).requires(
+            t.has(members))) for meta, members in ((S.OfUnion.Schema, "branches"), (S.OfIntersection.Schema, "parts"))])))
 """Whether the class `c` has been read: an object schema named after it, a reference object's where `c` is
 `eq=False`, described where it has a docstring, with a property or an adjacency per field; or a relation named after it,
-with its links."""
+with its links; or a union or an intersection named after it, with its members."""
 
 
 def _spelling(node: Any) -> str:
     return node.id.spelling
 
 
-def _type(schemas: Stores.Store, annotation: Any, where: str) -> Any:
+def _type(schemas: Stores.Store, annotation: Any, where: str, module: Py.Module) -> Any:
     """The type an annotation `Dataclass` writes names: a basic native, a named schema, or a list or dict of them."""
     if isinstance(annotation, Py.Name):
         name = _spelling(annotation)
         return S.OfNative.Data({"bool": bool, "int": int, "float": float, "str": str, "bytes": bytes}[name]) if (
-            name in NATIVES) else _named(schemas, name)
+            name in NATIVES) else _named(schemas, name, module, where)
     container = _spelling(annotation.value) if isinstance(annotation, Py.Subscript) and isinstance(
         annotation.value, Py.Name) else None
     if container == "list":
-        return S.OfIndexed.Builder().of(_type(schemas, annotation.slice, where)).create()
+        return S.OfIndexed.Builder().of(_type(schemas, annotation.slice, where, module)).create()
     if container == "dict" and isinstance(annotation.slice, Py.Tuple) and len(annotation.slice.elts) == 2:
-        key, item = (_type(schemas, element, where) for element in annotation.slice.elts)
+        key, item = (_type(schemas, element, where, module) for element in annotation.slice.elts)
         return S.OfIndexed.Builder().key(key).of(item).create()
     raise ValueError(f"{where}: cannot read the annotation {Python312.print(annotation).strip()}")
 
 
-def _named(schemas: Stores.Store, name: str) -> Any:
-    """The schema registered as `name`, or one registered empty, to be filled when its class is read."""
+def _named(schemas: Stores.Store, name: str, module: Py.Module, where: str = "") -> Any:
+    """The schema registered as `name`, or, where the module has a class of that name, one registered empty, to be
+    filled when that class is read: a union or an intersection where the class says so (`KIND`), else an object schema.
+    A name that is neither is refused: reading never makes up a schema."""
     if name not in schemas.names():
-        schemas.register(S.OfObject.Builder().name(name).create())
+        cls = next((statement for statement in module.body
+                    if isinstance(statement, Py.ClassDef) and statement.name.spelling == name), None)
+        if cls is None:
+            raise ValueError(f"{where}: {name} is not a class of the module or a schema of the store")
+        kind = _class_variables(cls).get("KIND")
+        builder = {"union": S.OfUnion.Builder, "intersection": S.OfIntersection.Builder}.get(kind, S.OfObject.Builder)
+        schemas.register(builder().name(name).create())
     return schemas.registered(name)
 
 
@@ -475,13 +534,13 @@ def _relation(schemas: Stores.Store, module: Py.Module, name: str, where: str) -
     relation = schemas.registered(name)
     entry = _entry_class(module, name)
     if not relation.links and entry is not None:
-        _read_entry(schemas, entry)
+        _read_entry(schemas, module, entry)
     if not relation.links:
         raise ValueError(f"{where}: {name} is not a relation the module or the store holds")
     return relation
 
 
-def _read_entry(schemas: Stores.Store, cls: Any) -> None:
+def _read_entry(schemas: Stores.Store, module: Py.Module, cls: Any) -> None:
     """Fills the relation an entry class describes: its links, its properties, its uniques and its description."""
     name = cls.name.spelling
     if name not in schemas.names():
@@ -489,10 +548,25 @@ def _read_entry(schemas: Stores.Store, cls: Any) -> None:
     variables = _class_variables(cls)
     links = variables["LINKS"]
     properties = [lambda q, f=_property(_spelling(field.target)), y=_type(
-        schemas, _optional(field.annotation), f"{name}.{_spelling(field.target)}"): q.name(f).of(y)
+        schemas, _optional(field.annotation), f"{name}.{_spelling(field.target)}", module): q.name(f).of(y)
         for field in _fields(cls) if _spelling(field.target) not in links]
     builder = S.OfRelation.Builder(schemas.registered(name)).links(*links).properties(*properties)
     builder = functools.reduce(lambda built, unique: built.unique(*unique), variables.get("UNIQUES", []), builder)
+    docstring = _docstring_of(cls)
+    if docstring is not None:
+        builder = builder.description(docstring)
+    builder.update()
+
+
+def _read_variants(schemas: Stores.Store, module: Py.Module, cls: Any, kind: str) -> None:
+    """Fills the union or intersection a class describes (`KIND`): a branch or part per field, and its description."""
+    name = cls.name.spelling
+    members = [lambda q, f=_property(_spelling(field.target)), y=_type(
+        schemas, _optional(field.annotation), f"{name}.{_spelling(field.target)}", module): q.name(f).of(y)
+        for field in _fields(cls)]
+    data = _named(schemas, name, module)
+    builder = (S.OfUnion.Builder(data).branches(*members) if kind == "union" else
+               S.OfIntersection.Builder(data).parts(*members))
     docstring = _docstring_of(cls)
     if docstring is not None:
         builder = builder.description(docstring)
@@ -510,19 +584,24 @@ def _read_class(store: Stores.Combined, match: dict[str, Any], arguments: dict[s
     cls = match["c"]
     schemas, module, name = _schemas(store), _module(store), cls.name.spelling
     if "LINKS" in _class_variables(cls):
-        _read_entry(schemas, cls)
+        _read_entry(schemas, module, cls)
+        return
+    kind = _class_variables(cls).get("KIND")
+    if kind is not None:
+        _read_variants(schemas, module, cls, kind)
         return
     properties, adjacencies = [], []
     for field in _fields(cls):
         field_name, where = _property(_spelling(field.target)), f"{name}.{_spelling(field.target)}"
         relation_name = _entries(field.annotation)
         if relation_name is None:
-            properties.append(lambda q, f=field_name, y=_type(schemas, _optional(field.annotation), where): q.name(f).of(y))
+            properties.append(lambda q, f=field_name, y=_type(schemas, _optional(field.annotation), where, module): q.name(
+                f).of(y))
         else:
             relation = _relation(schemas, module, relation_name, where)
             me = _me(module, name, field, relation_name, where)
             adjacencies.append(lambda q, f=field_name, rel=relation, me=me: q.name(f).of(rel).me(me))
-    builder = S.OfObject.Builder(_named(schemas, name)).properties(*properties).relations(*adjacencies)
+    builder = S.OfObject.Builder(_named(schemas, name, module)).properties(*properties).relations(*adjacencies)
     if any(_keywords(decorated).get("eq") == "False" for decorated in cls.decorator_list):
         builder = builder.ref()
     docstring = _docstring_of(cls)
@@ -535,9 +614,10 @@ Schema = T.Transform("Schema", _over({"c": Py.ClassDef.Schema}, _DECORATED),
                      _over({"c": Py.ClassDef.Schema}, _HAS_SCHEMA), rewrite=_read_class)
 """A dataclass of the module as an object schema, or an entry class (with `LINKS`) as a relation."""
 
-TO_PYTHON = (Dataclass, Entry)
+TO_PYTHON = (Dataclass, Entry, Union, Intersection)
 FROM_PYTHON = (Schema,)
-PLAIN = T.Policy(T.Clause("Dataclass", {"frozen": False}), T.Clause("Entry"))
+PLAIN = T.Policy(T.Clause("Dataclass", {"frozen": False}), T.Clause("Entry"), T.Clause("Union", {"frozen": False}),
+                 T.Clause("Intersection", {"frozen": False}))
 """Classes that are not frozen, and every relation's entry class."""
 
 
@@ -561,12 +641,12 @@ def read(module: Py.Module, schemas: Stores.Store | None = None) -> T.Session:
 
 
 def missing(session: T.Session) -> list[Any]:
-    """The object schemas, then the relations, of a generation's store that no class renders, each in name order: those
-    `Dataclass` or `Entry` does not render (see their befores), whose names a field may still name (completeness, which
-    mbse-patterns plans in general)."""
+    """The object schemas, unions, intersections and relations of a generation's store that no class renders, each kind
+    in name order: those `Dataclass`, `Union`, `Intersection` or `Entry` does not render (see their befores), whose names
+    a field may still name (completeness, which mbse-patterns plans in general)."""
     classes = {statement.name.spelling for statement in _module(session.store).body if isinstance(statement, Py.ClassDef)}
-    return [schema for kind in ("Schemas.Object", "Schemas.Relation") for schema in session.store.extent(kind)
-            if schema.name not in classes]
+    return [schema for kind in ("Schemas.Object", "Schemas.Union", "Schemas.Intersection", "Schemas.Relation")
+            for schema in session.store.extent(kind) if schema.name not in classes]
 
 
 def problems(session: T.Session) -> list[str]:

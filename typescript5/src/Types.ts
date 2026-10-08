@@ -12,13 +12,17 @@
  *   keyed by a basic native, nested `DEPTH` deep) and every adjacency is to a named relation. A reference object schema
  *   compares by identity (`eq=False`), and a schema's description is the class's docstring. Where a schema declares
  *   adjacencies via several links of one relation (a self-relation), each field's metadata names its link (`"me"`).
+ * - `Union` and `Intersection` render a named union or intersection as a value class of a dataclass field per branch or
+ *   part, each optional, as a proxy's union or intersection value reads it (`card.reach.email`); its class variable
+ *   `KIND` (`"union"`, `"intersection"`) says which. Their parameter `frozen` is the decision, as `Dataclass`'s.
  * - `Entry` renders a relation as the class of its entries, named after it: a field per link, typed by the object schemas
  *   that declare an adjacency via it (`Pager | Phone`), then one per property, and class variables `LINKS` and `UNIQUES`.
  *   An entry is shared by the objects it links, as mbse-schemas' proxies share theirs, so code reads an adjacency and its
  *   entries alike from proxies and generated classes (`for entry in contact.phones: entry.phone.number`).
- * - `Schema` reads a `@dataclass` class `c` of the module back: an entry class (with `LINKS`) as a relation, any other as
- *   an object schema, registered in the schemas' store; a class a field names before its own step is registered empty,
- *   and filled by that step. A field's annotation is read as `Dataclass` and `Entry` write one, and any other is refused.
+ * - `Schema` reads a `@dataclass` class `c` of the module back: an entry class (with `LINKS`) as a relation, a class with
+ *   `KIND` as a union or an intersection, any other as an object schema, registered in the schemas' store; a class of
+ *   the module a dataclass field names before its own step is registered empty, and filled by that step, and a name
+ *   that is neither a class of the module nor a schema of the store is refused. A field's annotation is read as `Dataclass` and `Entry` write one, and any other is refused.
  *
  * `generate(schemas, policy, earlier)` and `read(module, schemas)` run each to the end. `frozen` is the one thing a
  * schema does not hold: reading code back loses it, and the trace of the generation keeps it. A generation given the
@@ -105,10 +109,11 @@ function basic(type: E.Writer): E.Writer {
   return type.get("native").get("format").eq("basic");
 }
 
-/** A basic native, or a named object schema. */
+/** A basic native, or a named object schema, union or intersection: each a class. */
 function simple(type: E.Writer): E.Writer {
-  const named = P.Exists((q) => q.symbols({ x: S.OfObject.Schema }).requires(x.get("name").eq(type.get("named").get("name"))));
-  return basic(type).or_(E.operation("and", type.has("named"), named));
+  const [objects, unions, intersections] = [S.OfObject.Schema, S.OfUnion.Schema, S.OfIntersection.Schema].map((meta: any) =>
+    P.Exists((q) => q.symbols({ x: meta }).requires(x.get("name").eq(type.get("named").get("name"))))) as [never, never, never];
+  return basic(type).or_(E.operation("and", type.has("named"), E.operation("or", objects, E.operation("or", unions, intersections))));
 }
 
 /** A type `Dataclass` renders: a simple one, or a list without an extent of one it renders, positional or keyed by a
@@ -193,8 +198,8 @@ function require(module: Py.Module, source: string, named: string): void {
   }
 }
 
-function decorator(schema: S.OfObject.Data, frozen: boolean): (b: any) => any {
-  const keywords = ([["eq", schema.ref], ["frozen", frozen]] as [string, boolean][]).filter(([, on]) => on)
+function decorator(schema: any, frozen: boolean): (b: any) => any {
+  const keywords = ([["eq", schema.ref === true], ["frozen", frozen]] as [string, boolean][]).filter(([, on]) => on) // a union or intersection is a value
     .map(([key]) => [key, key === "eq" ? "False" : "True"]);
   if (keywords.length === 0) return (b) => name(b, "dataclass");
   return (b) => keywords.reduce((built, [a, v]) => built.add_keywords((w: any) => w.arg(a).value((x: any) => x.Constant().spelling(v))),
@@ -313,6 +318,46 @@ export const Entry = new T.Transform("Entry", over({ r: S.OfRelation.Schema as a
   over({ r: S.OfRelation.Schema as any }, P.Exists((q) => q.symbols({ c: Py.ClassDef.Schema }).requires(
     P.Contains(c.children, (e) => e.property.eq("name").and_(e.child.spelling.eq(r.name)))))), { rewrite: renderEntry as never });
 
+/** Where a union's and an intersection's members are, in their module form and their data. */
+const MEMBERS: Record<string, string> = { union: "branches", intersection: "parts" };
+
+function variantsRenderable(kind: string): E.Writer {
+  const members = MEMBERS[kind] as string;
+  return s.has("name").and_(s.has("parameters").not_()).and_(s.has(members)).and_(s.get(members).all("p", rendered(p.get("type"))));
+}
+
+function renderVariants(kind: string) {
+  return (store: Stores.Combined, match: Record<string, unknown>, args: Record<string, unknown>): void => {
+    const schema = match["s"] as any;
+    const B = Py.LANGUAGE.Builders as any;
+    const body = [...docstring(schema.description), B.AnnAssign().target((b: any) => name(b, "KIND")).annotation(
+      (b: any) => b.Subscript().value((x: any) => name(x, "ClassVar")).slice((x: any) => name(x, "str"))).value(
+      (b: any) => b.Constant().spelling(quoted(kind))).create(),
+      ...(schema[MEMBERS[kind] as string] as any[]).map((member) => optionalField(member.name, annotation(member.type)))];
+    const built = B.ClassDef().name(schema.name).add_decorator_list(decorator(schema, args["frozen"] as boolean)).create();
+    built.body = body;
+    const module = moduleOf(store);
+    require(module, "dataclasses", "dataclass");
+    require(module, "typing", "ClassVar");
+    place(module, built);
+  };
+}
+
+function variants(kind: string, meta: any): T.Transform {
+  return new T.Transform(kind.slice(0, 1).toUpperCase() + kind.slice(1), over({ s: meta }, variantsRenderable(kind)),
+    over({ s: meta }, HAS_CLASS), {
+      parameters: [(q) => q.name("frozen").of((x) => x.as_native(Boolean)).description("Whether the class is frozen")],
+      rewrite: renderVariants(kind) as never,
+    });
+}
+
+/** A named union as a class of a field per branch, of which one is set, as a proxy's union value reads it, its class
+ * variable `KIND` `"union"`. */
+export const Union = variants("union", S.OfUnion.Schema);
+/** A named intersection as a class of a field per part, as a proxy's intersection value reads it, its class variable
+ * `KIND` `"intersection"`. */
+export const Intersection = variants("intersection", S.OfIntersection.Schema);
+
 // --- Classes to schemas ---
 
 const NAMED_DATACLASS = P.Contains(n.children, (e) => e.property.eq("id").and_(e.child.spelling.eq("dataclass")));
@@ -342,36 +387,49 @@ const COUNTED = t.has("properties").and_(t.has("adjacencies")).and_(PROPERTIES.a
   t.has("properties").not_().and_(t.has("adjacencies").not_()).and_(FIELDS.eq(0n)));
 /** Whether the class `c` has been read: an object schema named after it, a reference object's where `c` is
  * `eq=False`, described where it has a docstring, with a property or an adjacency per field; or a relation named after
- * it, with its links. */
+ * it, with its links; or a union or an intersection named after it, with its members. */
 const HAS_SCHEMA = E.operation("or",
   P.Exists((q) => q.symbols({ t: S.OfObject.Schema }).requires(
     P.Contains(c.children, (e) => e.property.eq("name").and_(e.child.spelling.eq(t.name)))).requires(
     t.has("ref").eq(UNEQUAL).and_(t.has("description").eq(DOCUMENTED))).requires(COUNTED)),
-  P.Exists((q) => q.symbols({ r: S.OfRelation.Schema as any }).requires(
-    P.Contains(c.children, (e) => e.property.eq("name").and_(e.child.spelling.eq(r.name)))).requires(r.has("links"))));
+  E.operation("or", P.Exists((q) => q.symbols({ r: S.OfRelation.Schema as any }).requires(
+    P.Contains(c.children, (e) => e.property.eq("name").and_(e.child.spelling.eq(r.name)))).requires(r.has("links"))),
+  E.operation("or", ...[[S.OfUnion.Schema, "branches"], [S.OfIntersection.Schema, "parts"]].map(([meta, members]) =>
+    P.Exists((q) => q.symbols({ t: meta as any }).requires(
+      P.Contains(c.children, (e) => e.property.eq("name").and_(e.child.spelling.eq(t.name)))).requires(t.has(members as string)))))));
 
 function spelling(node: any): string {
   return node.id.spelling;
 }
 
 /** The type an annotation `Dataclass` writes names: a basic native, a named schema, or a list or dict of them. */
-function typeOf(schemas: Stores.Store, node: any, where: string): any {
+function typeOf(schemas: Stores.Store, node: any, where: string, module: Py.Module): any {
   if (node instanceof Py.Name) {
     const named = spelling(node);
-    return NATIVES.includes(named) ? S.OfNative.resolve((x) => x.token("basic", named)) : registered(schemas, named);
+    return NATIVES.includes(named) ? S.OfNative.resolve((x) => x.token("basic", named)) : registered(schemas, named, module, where);
   }
   const container = node instanceof Py.Subscript && node.value instanceof Py.Name ? spelling(node.value) : null;
-  if (container === "list") return new S.OfIndexed.Builder().of(typeOf(schemas, node.slice, where)).create();
+  if (container === "list") return new S.OfIndexed.Builder().of(typeOf(schemas, node.slice, where, module)).create();
   if (container === "dict" && node.slice instanceof Py.Tuple && node.slice.elts.length === 2) {
-    const [key, item] = node.slice.elts.map((element: any) => typeOf(schemas, element, where));
+    const [key, item] = node.slice.elts.map((element: any) => typeOf(schemas, element, where, module));
     return new S.OfIndexed.Builder().key(key).of(item).create();
   }
   throw new ValueError(`${where}: cannot read the annotation ${Python312.print(node).trim()}`);
 }
 
 /** The schema registered as `name`, or one registered empty, to be filled when its class is read. */
-function registered(schemas: Stores.Store, named: string): any {
-  if (![...schemas.names()].includes(named)) (schemas as any).register(new S.OfObject.Builder().name(named).create());
+/** The schema registered as `named`, or, where the module has a class of that name, one registered empty, to be filled
+ * when that class is read: a union or an intersection where the class says so (`KIND`), else an object schema. A name
+ * that is neither is refused: reading never makes up a schema. */
+function registered(schemas: Stores.Store, named: string, module: Py.Module, where = ""): any {
+  if (![...schemas.names()].includes(named)) {
+    const cls = module.body.find((statement: any) => statement instanceof Py.ClassDef && (statement as any).name.spelling === named);
+    if (cls === undefined) throw new ValueError(`${where}: ${named} is not a class of the module or a schema of the store`);
+    const kind = classVariables(cls).get("KIND");
+    const made = kind === "union" ? new S.OfUnion.Builder().name(named).create() : kind === "intersection"
+      ? new S.OfIntersection.Builder().name(named).create() : new S.OfObject.Builder().name(named).create();
+    (schemas as any).register(made);
+  }
   return schemas.registered(named);
 }
 
@@ -452,23 +510,38 @@ function relationOf(schemas: Stores.Store, module: Py.Module, named: string, whe
   if (![...schemas.names()].includes(named)) (schemas as any).register(new S.OfRelation.Builder().name(named).create());
   const relation = schemas.registered(named) as S.OfRelation.Data;
   const entry = entryClass(module, named);
-  if (relation.links.length === 0 && entry !== undefined) readEntry(schemas, entry);
+  if (relation.links.length === 0 && entry !== undefined) readEntry(schemas, module, entry);
   if (relation.links.length === 0) throw new ValueError(`${where}: ${named} is not a relation the module or the store holds`);
   return relation;
 }
 
 /** Fills the relation an entry class describes: its links, its properties, its uniques and its description. */
-function readEntry(schemas: Stores.Store, cls: any): void {
+function readEntry(schemas: Stores.Store, module: Py.Module, cls: any): void {
   const named = cls.name.spelling as string;
   if (![...schemas.names()].includes(named)) (schemas as any).register(new S.OfRelation.Builder().name(named).create());
   const variables = classVariables(cls);
   const links = variables.get("LINKS") as string[];
   const properties = fieldsOf(cls).filter((item: any) => !links.includes(spelling(item.target))).map((item: any) => {
-    const type = typeOf(schemas, optional(item.annotation), `${named}.${spelling(item.target)}`);
+    const type = typeOf(schemas, optional(item.annotation), `${named}.${spelling(item.target)}`, module);
     return (q: any) => q.name(property(spelling(item.target))).of(type);
   });
   let builder = ((variables.get("UNIQUES") ?? []) as string[][]).reduce((built: any, unique) => built.unique(...unique),
     new S.OfRelation.Builder(schemas.registered(named) as never).links(...links).properties(...properties));
+  const described = docstringOf(cls);
+  if (described !== null) builder = builder.description(described);
+  builder.update();
+}
+
+/** Fills the union or intersection a class describes (`KIND`): a branch or part per field, and its description. */
+function readVariants(schemas: Stores.Store, module: Py.Module, cls: any, kind: string): void {
+  const named = cls.name.spelling as string;
+  const members = fieldsOf(cls).map((item: any) => {
+    const type = typeOf(schemas, optional(item.annotation), `${named}.${spelling(item.target)}`, module);
+    return (q: any) => q.name(property(spelling(item.target))).of(type);
+  });
+  const data = registered(schemas, named, module);
+  let builder: any = kind === "union" ? new S.OfUnion.Builder(data).branches(...members)
+    : new S.OfIntersection.Builder(data).parts(...members);
   const described = docstringOf(cls);
   if (described !== null) builder = builder.description(described);
   builder.update();
@@ -483,7 +556,12 @@ function readClass(store: Stores.Combined, match: Record<string, unknown>): void
   const cls = match["c"] as any;
   const [schemas, module, named] = [schemasOf(store), moduleOf(store), cls.name.spelling as string];
   if (classVariables(cls).has("LINKS")) {
-    readEntry(schemas, cls);
+    readEntry(schemas, module, cls);
+    return;
+  }
+  const kind = classVariables(cls).get("KIND");
+  if (kind !== undefined) {
+    readVariants(schemas, module, cls, kind);
     return;
   }
   const [properties, adjacencies]: [((q: any) => any)[], ((q: any) => any)[]] = [[], []];
@@ -491,7 +569,7 @@ function readClass(store: Stores.Combined, match: Record<string, unknown>): void
     const [fieldName, where] = [property(spelling(statement.target)), `${named}.${spelling(statement.target)}`];
     const relationName = entriesOf(statement.annotation);
     if (relationName === null) {
-      const type = typeOf(schemas, optional(statement.annotation), where);
+      const type = typeOf(schemas, optional(statement.annotation), where, module);
       properties.push((q: any) => q.name(fieldName).of(type));
     } else {
       const relation = relationOf(schemas, module, relationName, where);
@@ -499,7 +577,7 @@ function readClass(store: Stores.Combined, match: Record<string, unknown>): void
       adjacencies.push((q: any) => q.name(fieldName).of(relation).me(me));
     }
   }
-  let builder = new S.OfObject.Builder(registered(schemas, named)).properties(...properties).relations(...adjacencies);
+  let builder = new S.OfObject.Builder(registered(schemas, named, module)).properties(...properties).relations(...adjacencies);
   if (cls.decorator_list.some((decorated: any) => keywords(decorated).get("eq") === "False")) builder = builder.ref();
   const described = docstringOf(cls);
   if (described !== null) builder = builder.description(described);
@@ -510,10 +588,11 @@ function readClass(store: Stores.Combined, match: Record<string, unknown>): void
 export const Schema = new T.Transform("Schema", over({ c: Py.ClassDef.Schema }, DECORATED),
   over({ c: Py.ClassDef.Schema }, HAS_SCHEMA), { rewrite: readClass as never });
 
-export const TO_PYTHON = [Dataclass, Entry];
+export const TO_PYTHON = [Dataclass, Entry, Union, Intersection];
 export const FROM_PYTHON = [Schema];
 /** Classes that are not frozen, and every relation's entry class. */
-export const PLAIN = new T.Policy(new T.Clause("Dataclass", { frozen: false }), new T.Clause("Entry"));
+export const PLAIN = new T.Policy(new T.Clause("Dataclass", { frozen: false }), new T.Clause("Entry"),
+  new T.Clause("Union", { frozen: false }), new T.Clause("Intersection", { frozen: false }));
 
 /** A session that renders the schemas `schemas` registers, and those they refer to, as the dataclasses of a new module,
  * run to the end: each decision an `earlier` step with its key took (`Dataclass(s=Contact)`) taken again, the others by
@@ -539,7 +618,7 @@ export function read(module: Py.Module, schemas: Stores.Store | null = null): T.
 export function missing(session: T.Session): any[] {
   const classes = new Set(moduleOf(session.store as Stores.Combined).body.filter((statement) => statement instanceof Py.ClassDef)
     .map((statement: any) => statement.name.spelling));
-  return ["Schemas.Object", "Schemas.Relation"].flatMap((kind) => [...session.store.extent(kind)])
+  return ["Schemas.Object", "Schemas.Union", "Schemas.Intersection", "Schemas.Relation"].flatMap((kind) => [...session.store.extent(kind)])
     .filter((schema: any) => !classes.has(schema.name));
 }
 
