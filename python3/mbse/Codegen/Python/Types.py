@@ -4,20 +4,20 @@ A session (mbse-patterns' `Transforms`) runs over one store, `store(schemas, mod
 those they refer to (mbse-schemas' `Reflection.of`), Python's syntax trees (mbse-programs), and the output, whose
 singleton `Codegen.Output` holds the module written or read. Each step is one decision:
 
-- `Dataclass` renders an object schema `s` as a class of the module, with a field per property, in order, then one per
-  adjacency from its relation's first link, each optional (`name: str | None = None`); its parameter `frozen` (a `bool`)
-  is the decision. It applies where `s` is named, declares no parameters, every property's type renders (a basic native,
-  a named object schema, or a list of them without an extent, positional or keyed by a basic native, nested `DEPTH`
-  deep) and every adjacency is to a named relation of two links with a container form: from its first link, a field
-  `set[E]` (no properties), `list[E]` (one `index: int`) or `dict[K, E]` (one other basic native key), unique in its
-  second link but for a set, `E` the reference object schemas that declare an adjacency via the second link (`A | B`);
-  from its second link, no field. The field's `metadata` holds what of the relation is not as the field says
-  (`ContactAddresses`, links `owner` and `item`, `key`, each target's adjacency back `contact_addresses`, uniques). A
-  reference object schema compares by identity (`eq=False`), and a schema's description is the class's docstring.
-- `Schema` reads a `@dataclass` class `c` of the module back as an object schema, registered in the schemas' store; a
-  class a field names before its own step is registered empty, and filled by that step. A field's annotation is
-  read as `Dataclass` writes one, and any other is refused; a container of reference object classes is a relation, of
-  value classes a list property. A schema's own adjacencies come first, then those other classes' fields give it.
+- `Dataclass` renders an object schema `s` as a class of the module, with a field per property, in order, each optional
+  (`name: str | None = None`), then one per adjacency, named after it, holding its entries (`phones: tuple[Phones, ...]
+  = ()`); its parameter `frozen` (a `bool`) is the decision. It applies where `s` is named, declares no parameters, every
+  property's type renders (a basic native, a named object schema, or a list of them without an extent, positional or
+  keyed by a basic native, nested `DEPTH` deep) and every adjacency is to a named relation. A reference object schema
+  compares by identity (`eq=False`), and a schema's description is the class's docstring. Where a schema declares
+  adjacencies via several links of one relation (a self-relation), each field's metadata names its link (`"me"`).
+- `Entry` renders a relation as the class of its entries, named after it: a field per link, typed by the object schemas
+  that declare an adjacency via it (`Pager | Phone`), then one per property, and class variables `LINKS` and `UNIQUES`.
+  An entry is shared by the objects it links, as mbse-schemas' proxies share theirs, so code reads an adjacency and its
+  entries alike from proxies and generated classes (`for entry in contact.phones: entry.phone.number`).
+- `Schema` reads a `@dataclass` class `c` of the module back: an entry class (with `LINKS`) as a relation, any other as
+  an object schema, registered in the schemas' store; a class a field names before its own step is registered empty,
+  and filled by that step. A field's annotation is read as `Dataclass` and `Entry` write one, and any other is refused.
 
 `generate(schemas, policy, earlier)` and `read(module, schemas)` run each to the end. `frozen` is the one thing a schema
 does not hold: reading code back loses it, and the trace of the generation keeps it. A generation given the steps of an
@@ -132,34 +132,26 @@ def _over(symbols: dict[str, Any], constraint: Any) -> P.OfPredicate.Data:
     return P.OfPredicate.Builder().symbols(symbols).requires(constraint).create()
 
 
+l = E.variable("l")
+
+
 def _declares(schema: E.Writer, link: E.Writer) -> E.Writer:
     """Whether `schema` declares an adjacency to the relation `r` via `link`."""
     return schema.has("adjacencies").and_(schema.get("adjacencies").any("b", b.get("relation").has("named").and_(
         b.get("relation").get("named").get("name").eq(r.get("name"))).and_(b.get("me").eq(link))))
 
 
-_FIRST, _SECOND = r.get("links").item(0), r.get("links").item(1)
-_UNIQUE_ITEM = r.has("uniques").and_(r.get("uniques").count().eq(1)).and_(r.get("uniques").item(0).count().eq(1)).and_(
-    r.get("uniques").item(0).item(0).eq(_SECOND))
-_SHAPED = r.has("properties").not_().and_(r.has("uniques").not_().or_(_UNIQUE_ITEM)).or_(
-    r.has("properties").and_(r.get("properties").count().eq(1)).and_(
-        _basic(r.get("properties").item(0).get("type"))).and_(_UNIQUE_ITEM))
-_OWNER_SIDE = E.operation("and", E.operation("and", a.get("me").eq(_FIRST).and_(r.has("parameters").not_()).and_(_SHAPED),
-                                             P.Exists(lambda q: q.symbols({"y": S.OfObject.Schema}).requires(
-                                                 _declares(y, _SECOND)))),
-                          P.Forall(lambda q: q.symbols({"y": S.OfObject.Schema}).requires(
-                              E.operation("implies", _declares(y, _SECOND), y.has("ref")))))
-_ITEM_SIDE = E.operation("and", a.get("me").eq(_SECOND), P.Exists(lambda q: q.symbols({"u": S.OfObject.Schema}).requires(
-    _declares(u, _FIRST))))
 _RELATED = E.operation("and", a.get("relation").has("named"), P.Exists(lambda q: q.symbols({"r": S.OfRelation.Schema}).requires(
-    r.get("name").eq(a.get("relation").get("named").get("name")).and_(r.get("links").count().eq(2))).requires(
-    E.operation("or", _OWNER_SIDE, _ITEM_SIDE))))
-"""Whether `Dataclass` renders the adjacency `a`: to a named relation of two links, from its first, as a container field
-(its relation without properties, or with one basic native and unique in its second link; each object schema it holds a
-reference object schema), or from its second, which only declares the types the first holds."""
+    r.get("name").eq(a.get("relation").get("named").get("name")))))
+"""Whether the adjacency `a` is to a named relation, whose entry class its field holds."""
 _RENDERABLE = s.has("name").and_(s.has("parameters").not_()).and_(
     s.has("adjacencies").not_().or_(s.get("adjacencies").all("a", _RELATED))).and_(
     s.has("properties").not_().or_(s.get("properties").all("p", _rendered(p.get("type")))))
+_ENTRY_RENDERABLE = E.operation("and", r.has("name").and_(r.has("parameters").not_()).and_(
+    r.has("properties").not_().or_(r.get("properties").all("p", _rendered(p.get("type"))))),
+    r.get("links").all("l", P.Exists(lambda q: q.symbols({"y": S.OfObject.Schema}).requires(_declares(y, l)))))
+"""Whether `Entry` renders the relation `r`: named, without parameters, its properties' types rendered, and each link
+declared by an object schema, which types it."""
 _HAS_CLASS = P.Exists(lambda q: q.symbols({"c": Py.ClassDef.Schema}).requires(
     P.Contains(c.children, lambda e: e.property == "name" and e.child.spelling == s.name)))
 
@@ -189,19 +181,24 @@ def _quoted(text: str) -> str:
     return f'"{escaped}"'
 
 
-def _imports(module: Py.Module, field: bool) -> None:
-    """The imports a dataclass needs, once, at the top: `field` too where a field has metadata."""
-    present = [statement for statement in module.body if isinstance(statement, Py.ImportFrom)]
+
+
+def _require(module: Py.Module, source: str, name: str) -> None:
+    """Imports `name` from `source`, once, after `from __future__ import annotations`, the imports in the order
+    `dataclasses`, `typing`, whichever step needs them first."""
     B = Py.LANGUAGE.Builders
-    if not present:
-        module.body[0:0] = [
-            B.ImportFrom().module(lambda d: d.add_names("__future__")).add_names(
-                lambda a: a.name(lambda d: d.add_names("annotations"))).create(),
-            B.ImportFrom().module(lambda d: d.add_names("dataclasses")).add_names(
-                lambda a: a.name(lambda d: d.add_names("dataclass"))).create()]
-    dataclasses = module.body[1]
-    if field and all(alias.name.names[0].spelling != "field" for alias in dataclasses.names):
-        dataclasses.names.append(B.Alias().name(lambda d: d.add_names("field")).create())
+    imports = [statement for statement in module.body if isinstance(statement, Py.ImportFrom)]
+    if not imports:
+        imports = [B.ImportFrom().module(lambda d: d.add_names("__future__")).add_names(
+            lambda a: a.name(lambda d: d.add_names("annotations"))).create()]
+        module.body.insert(0, imports[0])
+    found = next((i for i in imports if i.module.names[0].spelling == source), None)
+    if found is None:
+        found = B.ImportFrom().module(lambda d: d.add_names(source)).create()
+        position = 2 if source == "typing" else 1  # dataclasses is always needed first
+        module.body.insert(position, found)
+    if all(alias.name.names[0].spelling != name for alias in found.names):
+        found.names.append(B.Alias().name(lambda d: d.add_names(name)).create())
 
 
 def _decorator(schema: Any, frozen: bool) -> Any:
@@ -214,94 +211,95 @@ def _decorator(schema: Any, frozen: bool) -> Any:
         keywords, b.Call().func(lambda x: _name(x, "dataclass")))
 
 
-def _snake(name: str) -> str:
-    return re.sub(r"(?<!^)(?=[A-Z])", "_", name).lower()
+def _union(names: list[str]) -> Any:
+    """`A | B | ...` of the names, in order."""
+    return functools.reduce(lambda left, name: lambda b: b.BinOp().left(left).op("|").right(lambda x: _name(x, name)),
+                            names[1:], lambda b: _name(b, names[0]))
 
 
-def _pascal(name: str) -> str:
-    return "".join(part[:1].upper() + part[1:] for part in name.split("_"))
+def _strings(values: list[Any]) -> Any:
+    """A tuple of strings, or of tuples of strings."""
+    return lambda b: functools.reduce(lambda built, value: built.add_elts(
+        _strings(value) if isinstance(value, list) else lambda x: x.Constant().spelling(_quoted(value))), values, b.Tuple())
 
 
-def _literal(value: Any) -> Any:
-    """A Python literal of text, a list of them, or a dict of them, as a builder spec."""
-    if isinstance(value, str):
-        return lambda b: b.Constant().spelling(_quoted(value))
-    if isinstance(value, list):
-        return lambda b: functools.reduce(lambda built, item: built.add_elts(_literal(item)), value, b.List())
-    return lambda b: functools.reduce(lambda built, item: built.add_items(
-        lambda i: i.key(_literal(item[0])).value(_literal(item[1]))), value.items(), b.Dict())
+def _texts(depth: int) -> Any:
+    """`tuple[str, ...]`, nested `depth` deep."""
+    item = (lambda b: _name(b, "str")) if depth == 1 else _texts(depth - 1)
+    return lambda b: b.Subscript().value(lambda x: _name(x, "tuple")).slice(
+        lambda x: x.Tuple().add_elts(item).add_elts(lambda y: y.Constant().spelling("...")))
 
 
-def _container(owner: Any, name: str, adjacency: Any, targets: list[Any]) -> tuple[Any, dict[str, Any]]:
-    """The annotation of the container field an adjacency from its relation's first link is, and the metadata its
-    relation needs where it is not as the container's name says (`Contact` + `addresses`: `ContactAddresses`, links
-    `owner` and `item`, `index` or `key`, each target's adjacency back `contact_addresses`, unique in `item` but for a
-    set)."""
-    relation = adjacency.relation
-    first, second = relation.links
-    element = functools.reduce(lambda left, target: lambda b: b.BinOp().left(left).op("|").right(
-        lambda x: _name(x, target.name)), targets[1:], lambda b: _name(b, targets[0].name))
-    shape, key = "set", None
-    if relation.properties:
-        ((key, prop),) = relation.properties.items()
-        shape = "list" if key == "index" and prop.type.type is int else "dict"
-    metadata: dict[str, Any] = {}
-    if relation.name != owner.name + _pascal(name):
-        metadata["relation"] = relation.name
-    if (first, second) != ("owner", "item"):
-        metadata["links"] = [first, second]
-    if shape == "dict" and key != "key":
-        metadata["key"] = key
-    backs = {target.name: next(b.name for b in target.adjacencies.values() if b.relation is relation and b.me == second)
-             for target in targets}
-    if set(backs.values()) != {f"{_snake(owner.name)}_{name}"}:
-        metadata["back"] = next(iter(backs.values())) if len(set(backs.values())) == 1 else backs
-    uniques = [sorted(unique) for unique in relation.uniques]  # none, or the second link alone
-    if uniques != ([] if shape == "set" else [[second]]):
-        metadata["uniques"] = uniques
-    if shape == "set":
-        return lambda b: b.Subscript().value(lambda x: _name(x, "set")).slice(element), metadata
-    if shape == "list":
-        return lambda b: b.Subscript().value(lambda x: _name(x, "list")).slice(element), metadata
-    return lambda b: b.Subscript().value(lambda x: _name(x, "dict")).slice(
-        lambda x: x.Tuple().add_elts(_annotation(prop.type)).add_elts(element)), metadata
+def _class_variable(name: str, depth: int, values: list[Any]) -> Any:
+    """`NAME: ClassVar[tuple[str, ...]] = (...)`: what an entry class says of its relation."""
+    return Py.LANGUAGE.Builders.AnnAssign().target(lambda b: _name(b, name)).annotation(
+        lambda b: b.Subscript().value(lambda x: _name(x, "ClassVar")).slice(_texts(depth))).value(
+        lambda b: b.Parenthesized().value(_strings(values))).create()
 
 
-def _default(metadata: dict[str, Any]) -> Any:
-    """`None`, or `field(default=None, metadata=...)` with metadata."""
-    if not metadata:
-        return lambda b: b.Constant().spelling("None")
-    return lambda b: b.Call().func(lambda x: _name(x, "field")).add_keywords(
-        lambda w: w.arg("default").value(lambda x: x.Constant().spelling("None"))).add_keywords(
-        lambda w: w.arg("metadata").value(_literal(metadata)))
-
-
-def _optional_field(name: str, annotation: Any, default: Any) -> Any:
+def _optional_field(name: str, annotation: Any) -> Any:
+    """`name: T | None = None`."""
     return Py.LANGUAGE.Builders.AnnAssign().target(lambda b: _name(b, _field(name))).annotation(
-        lambda b: b.BinOp().left(annotation).op("|").right(lambda x: x.Constant().spelling("None"))).value(default).create()
+        lambda b: b.BinOp().left(annotation).op("|").right(lambda x: x.Constant().spelling("None"))).value(
+        lambda b: b.Constant().spelling("None")).create()
+
+
+def _docstring(description: str | None) -> list[Any]:
+    return [] if description is None else [
+        Py.LANGUAGE.Builders.Expr().value(lambda b: b.Constant().spelling(_quoted(description))).create()]
+
+
+def _declarers(objects: list[Any], relation: Any, link: str) -> list[Any]:
+    """The object schemas that declare an adjacency to `relation` via `link`, in name order: the link's types."""
+    return [o for o in objects if any(a.relation is relation and a.me == link for a in o.adjacencies.values())]
 
 
 def _render(store: Stores.Combined, match: dict[str, Any], arguments: dict[str, Any]) -> None:
     schema = match["s"]
     B = Py.LANGUAGE.Builders
-    body = [B.Expr().value(lambda b: b.Constant().spelling(_quoted(schema.description))).create()] if (
-        schema.description is not None) else []
-    body += [_optional_field(name, _annotation(prop.type), _default({})) for name, prop in schema.properties.items()]
-    objects = list(store.extent("Schemas.Object"))
+    body = _docstring(schema.description) + [_optional_field(name, _annotation(prop.type))
+                                             for name, prop in schema.properties.items()]
     needs_field = False
     for name, adjacency in schema.adjacencies.items():
-        first, second = adjacency.relation.links
-        if adjacency.me != first:
-            continue  # the other side of a container field: it only declares the types the field holds
-        targets = [o for o in objects if any(
-            b.relation is adjacency.relation and b.me == second for b in o.adjacencies.values())]
-        annotation, metadata = _container(schema, name, adjacency, targets)
-        needs_field = needs_field or bool(metadata)
-        body.append(_optional_field(name, annotation, _default(metadata)))
+        relation = adjacency.relation
+        entries = lambda b, relation=relation: b.Subscript().value(lambda x: _name(x, "tuple")).slice(  # noqa: E731
+            lambda x: x.Tuple().add_elts(lambda y: _name(y, relation.name)).add_elts(lambda y: y.Constant().spelling("...")))
+        ambiguous = len({a.me for a in schema.adjacencies.values() if a.relation is relation}) > 1
+        default = (lambda b: b.Tuple()) if not ambiguous else (
+            lambda b, me=adjacency.me: b.Call().func(lambda x: _name(x, "field")).add_keywords(
+                lambda kw: kw.arg("default").value(lambda x: x.Tuple())).add_keywords(
+                lambda kw: kw.arg("metadata").value(lambda x: x.Dict().add_items(
+                    lambda i: i.key(lambda k: k.Constant().spelling('"me"')).value(
+                        lambda v: v.Constant().spelling(_quoted(me)))))))
+        needs_field = needs_field or ambiguous
+        body.append(B.AnnAssign().target(lambda b, name=name: _name(b, _field(name))).annotation(entries).value(
+            default).create())
     built = B.ClassDef().name(schema.name).add_decorator_list(_decorator(schema, arguments["frozen"])).create()
     built.body = body or [B.Pass().create()]
     module = _module(store)
-    _imports(module, needs_field)
+    _require(module, "dataclasses", "dataclass")
+    if needs_field:
+        _require(module, "dataclasses", "field")
+    _place(module, built)
+
+
+def _render_entry(store: Stores.Combined, match: dict[str, Any], arguments: dict[str, Any]) -> None:
+    relation = match["r"]
+    B = Py.LANGUAGE.Builders
+    objects = list(store.extent("Schemas.Object"))
+    uniques = sorted(sorted(unique) for unique in relation.uniques)
+    body = _docstring(relation.description) + [_class_variable("LINKS", 1, list(relation.links))]
+    body += [_class_variable("UNIQUES", 2, uniques)] if uniques else []
+    body += [_optional_field(link, _union([o.name for o in _declarers(objects, relation, link)]))
+             for link in relation.links]
+    body += [_optional_field(name, _annotation(prop.type)) for name, prop in relation.properties.items()]
+    built = B.ClassDef().name(relation.name).add_decorator_list(
+        lambda b: b.Call().func(lambda x: _name(x, "dataclass")).add_keywords(
+            lambda kw: kw.arg("eq").value(lambda x: x.Constant().spelling("False")))).create()
+    built.body = body
+    module = _module(store)
+    _require(module, "dataclasses", "dataclass")
+    _require(module, "typing", "ClassVar")
     _place(module, built)
 
 
@@ -318,6 +316,13 @@ Dataclass = T.Transform(
     [lambda q: q.name("frozen").of(lambda x: x.as_native(bool)).description("Whether the class is frozen")], _render)
 """An object schema as a dataclass of the module."""
 
+Entry = T.Transform(
+    "Entry", _over({"r": S.OfRelation.Schema}, _ENTRY_RENDERABLE), _over({"r": S.OfRelation.Schema}, P.Exists(
+        lambda q: q.symbols({"c": Py.ClassDef.Schema}).requires(
+            P.Contains(c.children, lambda e: e.property == "name" and e.child.spelling == r.name)))), rewrite=_render_entry)
+"""A relation as the class of its entries: a field per link, typed by the object schemas that declare it, then one per
+property, and class variables `LINKS` and `UNIQUES` that say which fields are links and what is unique."""
+
 # --- Classes to schemas ---
 
 _NAMED_DATACLASS = P.Contains(n.children, lambda e: e.property == "id" and e.child.spelling == "dataclass")
@@ -329,10 +334,7 @@ _DECORATED = E.operation(
         P.Contains(k.children, lambda e: e.property == "func" and e.child == n)).requires(_NAMED_DATACLASS)))
 _FIELDS = c.entries("children").count_where("f", E.variable("f").get("property").eq("body").and_(
     E.variable("f").get("child").get("kind").eq("AnnAssign")))
-_OWNED = t.get("adjacencies").count_where("a", E.operation("and", a.get("relation").has("named"), P.Exists(
-    lambda q: q.symbols({"r": S.OfRelation.Schema}).requires(
-        r.get("name").eq(a.get("relation").get("named").get("name")).and_(a.get("me").eq(_FIRST))))))
-"""How many container fields the schema `t` has: its adjacencies from their relations' first links."""
+_ADJACENCIES = t.get("adjacencies").count()
 _PROPERTIES = t.get("properties").count()
 _UNEQUAL = P.Exists(lambda q: q.symbols({"k": Py.Call.Schema, "w": Py.Keyword.Schema}).requires(
     P.Contains(c.children, lambda e: e.property == "decorator_list" and e.child == k)).requires(
@@ -344,13 +346,20 @@ _DOCUMENTED = P.Exists(lambda q: q.symbols({"d": Py.Expr.Schema}).requires(
     P.Contains(c.children, lambda e: e.property == "body" and e.index == 0 and e.child == d)).requires(
     P.Contains(d.children, lambda e: e.property == "value" and e.child.kind == "Constant")))
 """Whether the class `c` has a docstring."""
-_HAS_SCHEMA = P.Exists(lambda q: q.symbols({"t": S.OfObject.Schema}).requires(
-    P.Contains(c.children, lambda e: e.property == "name" and e.child.spelling == t.name)).requires(
-    t.has("ref").eq(_UNEQUAL).and_(t.has("description").eq(_DOCUMENTED))).requires(
-    t.has("properties").and_(t.has("adjacencies")).and_(_PROPERTIES.add(_OWNED).eq(_FIELDS)).or_(
-        t.has("properties").and_(t.has("adjacencies").not_()).and_(_PROPERTIES.eq(_FIELDS))).or_(
-        t.has("properties").not_().and_(t.has("adjacencies")).and_(_OWNED.eq(_FIELDS))).or_(
-        t.has("properties").not_().and_(t.has("adjacencies").not_()).and_(_FIELDS.eq(0)))))
+_COUNTED = t.has("properties").and_(t.has("adjacencies")).and_(_PROPERTIES.add(_ADJACENCIES).eq(_FIELDS)).or_(
+    t.has("properties").and_(t.has("adjacencies").not_()).and_(_PROPERTIES.eq(_FIELDS))).or_(
+    t.has("properties").not_().and_(t.has("adjacencies")).and_(_ADJACENCIES.eq(_FIELDS))).or_(
+    t.has("properties").not_().and_(t.has("adjacencies").not_()).and_(_FIELDS.eq(0)))
+_HAS_SCHEMA = E.operation(
+    "or", P.Exists(lambda q: q.symbols({"t": S.OfObject.Schema}).requires(
+        P.Contains(c.children, lambda e: e.property == "name" and e.child.spelling == t.name)).requires(
+        t.has("ref").eq(_UNEQUAL).and_(t.has("description").eq(_DOCUMENTED))).requires(_COUNTED)),
+    P.Exists(lambda q: q.symbols({"r": S.OfRelation.Schema}).requires(
+        P.Contains(c.children, lambda e: e.property == "name" and e.child.spelling == r.name)).requires(
+        r.has("links"))))
+"""Whether the class `c` has been read: an object schema named after it, a reference object's where `c` is
+`eq=False`, described where it has a docstring, with a property or an adjacency per field; or a relation named after it,
+with its links."""
 
 
 def _spelling(node: Any) -> str:
@@ -404,109 +413,134 @@ def _keywords(decorator: Any) -> dict[str, str]:
     return {kw.arg.spelling: kw.value.spelling for kw in decorator.keywords} if isinstance(decorator, Py.Call) else {}
 
 
-def _reference(module: Py.Module, schemas: Stores.Store, name: str) -> bool:
-    """Whether the class or schema `name` is a reference object's: `@dataclass(eq=False)` in the module, or `ref`."""
-    for statement in module.body:
-        if isinstance(statement, Py.ClassDef) and statement.name.spelling == name:
-            return any(_keywords(d).get("eq") == "False" for d in statement.decorator_list)
-    return name in schemas.names() and getattr(schemas.registered(name), "ref", False)
 
 
-def _alternatives(node: Any) -> list[Any]:
-    """The types of `A | B | ...`, in order."""
+def _class_variables(cls: Any) -> dict[str, Any]:
+    """The values of a class's `ClassVar`s, by name: tuples of text, or of tuples of text."""
+    def value(node: Any) -> Any:
+        node = node.value if isinstance(node, Py.Parenthesized) else node
+        return [value(item) for item in node.elts] if isinstance(node, Py.Tuple) else _unquoted(node.spelling)
+    return {_spelling(statement.target): value(statement.value) for statement in cls.body
+            if isinstance(statement, Py.AnnAssign) and isinstance(statement.annotation, Py.Subscript)
+            and isinstance(statement.annotation.value, Py.Name) and _spelling(statement.annotation.value) == "ClassVar"}
+
+
+def _fields(cls: Any) -> list[Any]:
+    """A class's fields: its annotated names but its `ClassVar`s."""
+    variables = _class_variables(cls)
+    return [statement for statement in cls.body
+            if isinstance(statement, Py.AnnAssign) and _spelling(statement.target) not in variables]
+
+
+def _entry_class(module: Py.Module, name: str) -> Any:
+    """The entry class (with `LINKS`) named `name` in the module, if any."""
+    return next((statement for statement in module.body if isinstance(statement, Py.ClassDef)
+                 and statement.name.spelling == name and "LINKS" in _class_variables(statement)), None)
+
+
+def _alternatives(node: Any) -> list[str]:
+    """The names of `A | B | ...`, in order."""
     if isinstance(node, Py.BinOp) and node.op == "|":
         return [*_alternatives(node.left), *_alternatives(node.right)]
-    return [node]
+    return [_spelling(node)] if isinstance(node, Py.Name) else []
 
 
-def _elements(module: Py.Module, schemas: Stores.Store, annotation: Any) -> tuple[str, Any, list[str]] | None:
-    """A container field's shape (`set`, `list` or `dict`), its key's annotation, and the classes it holds, each a
-    reference object's; None for any other annotation."""
-    if not (isinstance(annotation, Py.Subscript) and isinstance(annotation.value, Py.Name)):
-        return None
-    shape, key, element = _spelling(annotation.value), None, annotation.slice
-    if shape == "dict" and isinstance(element, Py.Tuple) and len(element.elts) == 2:
-        key, element = element.elts
-    names = [_spelling(node) if isinstance(node, Py.Name) else None for node in _alternatives(element)]
-    if shape not in ("set", "list", "dict") or None in names or not all(
-            _reference(module, schemas, name) for name in names):  # type: ignore[arg-type]
-        return None
-    return shape, key, names  # type: ignore[return-value]
+def _entries(annotation: Any) -> str | None:
+    """The entry class `tuple[R, ...]` holds, or None for another annotation."""
+    if isinstance(annotation, Py.Subscript) and isinstance(annotation.value, Py.Name) and (
+            _spelling(annotation.value) == "tuple") and isinstance(annotation.slice, Py.Tuple) and len(
+            annotation.slice.elts) == 2 and isinstance(annotation.slice.elts[0], Py.Name):
+        return _spelling(annotation.slice.elts[0])
+    return None
 
 
-def _value(node: Any) -> Any:
-    """The text, list or dict a literal of them is."""
-    if isinstance(node, Py.Constant):
-        return _unquoted(node.spelling)
-    if isinstance(node, Py.List):
-        return [_value(item) for item in node.elts]
-    return {_value(item.key): _value(item.value) for item in node.items}
+def _me(module: Py.Module, owner: str, field: Any, relation: str, where: str) -> str:
+    """The link an adjacency field is from: its metadata's `me`, else the one link of its entry class typed by the owner."""
+    if isinstance(field.value, Py.Call):
+        metadata = next(kw.value for kw in field.value.keywords if kw.arg.spelling == "metadata")
+        return _unquoted(next(item.value.spelling for item in metadata.items if _unquoted(item.key.spelling) == "me"))
+    entry = _entry_class(module, relation)
+    links = _class_variables(entry)["LINKS"] if entry is not None else []
+    typed = [link for statement in (_fields(entry) if entry is not None else []) for link in [_spelling(statement.target)]
+             if link in links and owner in _alternatives(_optional(statement.annotation))]
+    if len(typed) != 1:
+        raise ValueError(f"{where}: cannot tell which link of {relation} it is from")
+    return typed[0]
 
 
-def _metadata(default: Any) -> dict[str, Any]:
-    """The metadata of `field(default=None, metadata=...)`, or none."""
-    if not isinstance(default, Py.Call):
-        return {}
-    return next((_value(kw.value) for kw in default.keywords if kw.arg.spelling == "metadata"), {})
+def _relation(schemas: Stores.Store, module: Py.Module, name: str, where: str) -> Any:
+    """The relation registered as `name`, read from its entry class first where the module has it and it has no links."""
+    if name not in schemas.names():
+        schemas.register(S.OfRelation.Builder().name(name).create())
+    relation = schemas.registered(name)
+    entry = _entry_class(module, name)
+    if not relation.links and entry is not None:
+        _read_entry(schemas, entry)
+    if not relation.links:
+        raise ValueError(f"{where}: {name} is not a relation the module or the store holds")
+    return relation
 
 
-def _relate(schemas: Stores.Store, owner: str, name: str, shape: str, key: Any, targets: list[str], metadata: dict[str, Any],
-            where: str) -> tuple[Any, list[tuple[Any, Any]]]:
-    """The relation a container field is, registered; the adjacency the owner gets, and each target's back."""
-    first, second = metadata.get("links", ["owner", "item"])
-    properties = [] if shape == "set" else [
-        lambda q: q.name("index").of(lambda x: x.as_native(int))] if shape == "list" else [
-        lambda q: q.name(metadata.get("key", "key")).of(_type(schemas, key, where))]
-    uniques = metadata.get("uniques", [] if shape == "set" else [[second]])
-    builder = S.OfRelation.Builder().name(metadata.get("relation", owner + _pascal(name))).links(first, second).properties(
-        *properties)
-    relation = functools.reduce(lambda built, unique: built.unique(*unique), uniques, builder).create()
-    schemas.register(relation)
-    back = metadata.get("back", f"{_snake(owner)}_{name}")
-    backs = [(_named(schemas, target), lambda q, n=back if isinstance(back, str) else back[target]: q.name(n).of(
-        relation).me(second)) for target in targets]
-    return (lambda q: q.name(name).of(relation).me(first)), backs
+def _read_entry(schemas: Stores.Store, cls: Any) -> None:
+    """Fills the relation an entry class describes: its links, its properties, its uniques and its description."""
+    name = cls.name.spelling
+    if name not in schemas.names():
+        schemas.register(S.OfRelation.Builder().name(name).create())
+    variables = _class_variables(cls)
+    links = variables["LINKS"]
+    properties = [lambda q, f=_property(_spelling(field.target)), y=_type(
+        schemas, _optional(field.annotation), f"{name}.{_spelling(field.target)}"): q.name(f).of(y)
+        for field in _fields(cls) if _spelling(field.target) not in links]
+    builder = S.OfRelation.Builder(schemas.registered(name)).links(*links).properties(*properties)
+    builder = functools.reduce(lambda built, unique: built.unique(*unique), variables.get("UNIQUES", []), builder)
+    docstring = _docstring_of(cls)
+    if docstring is not None:
+        builder = builder.description(docstring)
+    builder.update()
+
+
+def _docstring_of(cls: Any) -> str | None:
+    body = list(cls.body)
+    if body and isinstance(body[0], Py.Expr) and isinstance(body[0].value, Py.Constant):
+        return _unquoted(body[0].value.spelling)
+    return None
 
 
 def _read_class(store: Stores.Combined, match: dict[str, Any], arguments: dict[str, Any]) -> None:
     cls = match["c"]
-    schemas = _schemas(store)
-    name = cls.name.spelling
-    body = list(cls.body)
-    docstring = body[0] if body and isinstance(body[0], Py.Expr) and isinstance(body[0].value, Py.Constant) else None
-    module = _module(store)
-    properties, adjacencies, backs = [], [], []
-    for field in (statement for statement in body if isinstance(statement, Py.AnnAssign)):
+    schemas, module, name = _schemas(store), _module(store), cls.name.spelling
+    if "LINKS" in _class_variables(cls):
+        _read_entry(schemas, cls)
+        return
+    properties, adjacencies = [], []
+    for field in _fields(cls):
         field_name, where = _property(_spelling(field.target)), f"{name}.{_spelling(field.target)}"
-        container = _elements(module, schemas, _optional(field.annotation))
-        if container is None:
+        relation_name = _entries(field.annotation)
+        if relation_name is None:
             properties.append(lambda q, f=field_name, y=_type(schemas, _optional(field.annotation), where): q.name(f).of(y))
         else:
-            adjacency, back = _relate(schemas, name, field_name, *container, _metadata(field.value), where)
-            adjacencies.append(adjacency)
-            backs += back
-    schema = _named(schemas, name)
-    earlier = dict(schema.adjacencies)  # backs other classes' fields gave it, which follow its own
-    schema.adjacencies = {}
-    builder = S.OfObject.Builder(schema).properties(*properties).relations(*adjacencies)
-    if any(_keywords(d).get("eq") == "False" for d in cls.decorator_list):
+            relation = _relation(schemas, module, relation_name, where)
+            me = _me(module, name, field, relation_name, where)
+            adjacencies.append(lambda q, f=field_name, rel=relation, me=me: q.name(f).of(rel).me(me))
+    builder = S.OfObject.Builder(_named(schemas, name)).properties(*properties).relations(*adjacencies)
+    if any(_keywords(decorated).get("eq") == "False" for decorated in cls.decorator_list):
         builder = builder.ref()
+    docstring = _docstring_of(cls)
     if docstring is not None:
-        builder = builder.description(_unquoted(docstring.value.spelling))
+        builder = builder.description(docstring)
     builder.update()
-    schema.adjacencies.update(earlier)
-    for target, back in backs:
-        S.OfObject.Builder(target).relations(back).update()
 
 
 Schema = T.Transform("Schema", _over({"c": Py.ClassDef.Schema}, _DECORATED),
                      _over({"c": Py.ClassDef.Schema}, _HAS_SCHEMA), rewrite=_read_class)
-"""A dataclass of the module as an object schema."""
+"""A dataclass of the module as an object schema, or an entry class (with `LINKS`) as a relation."""
 
-TO_PYTHON = (Dataclass,)
+TO_PYTHON = (Dataclass, Entry)
 FROM_PYTHON = (Schema,)
-PLAIN = T.Policy(T.Clause("Dataclass", {"frozen": False}))
-"""Classes that are not frozen."""
+PLAIN = T.Policy(T.Clause("Dataclass", {"frozen": False}), T.Clause("Entry"))
+"""Classes that are not frozen, and every relation's entry class."""
+
+
 
 
 def generate(schemas: Stores.Store, policy: T.Policy = PLAIN, earlier: Iterable[T.Step] = ()) -> T.Session:
@@ -527,10 +561,12 @@ def read(module: Py.Module, schemas: Stores.Store | None = None) -> T.Session:
 
 
 def missing(session: T.Session) -> list[Any]:
-    """The object schemas of a generation's store that no class renders, in name order: those `Dataclass` does not
-    render (see its before), whose names a field may still name (completeness, which mbse-patterns plans in general)."""
+    """The object schemas, then the relations, of a generation's store that no class renders, each in name order: those
+    `Dataclass` or `Entry` does not render (see their befores), whose names a field may still name (completeness, which
+    mbse-patterns plans in general)."""
     classes = {statement.name.spelling for statement in _module(session.store).body if isinstance(statement, Py.ClassDef)}
-    return [schema for schema in session.store.extent("Schemas.Object") if schema.name not in classes]
+    return [schema for kind in ("Schemas.Object", "Schemas.Relation") for schema in session.store.extent(kind)
+            if schema.name not in classes]
 
 
 def problems(session: T.Session) -> list[str]:

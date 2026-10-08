@@ -35,8 +35,9 @@ requires.
 
 | Transform | Symbols | Before | After | Parameters |
 |---|---|---|---|---|
-| `Dataclass` | `s`: `Schemas.OfObject.Schema` | `s` is named, declares no parameters, every property's type renders, and every adjacency has a container form | the module has a class named after `s` | `frozen`: `bool` |
-| `Schema` | `c`: `Programs.Python.ClassDef` | `c` is decorated `@dataclass` or `@dataclass(...)` | a schema named after `c` has as many properties and container adjacencies as `c` has annotated fields, is `ref` where `c` is `eq=False`, and is described where `c` has a docstring | none |
+| `Dataclass` | `s`: `Schemas.OfObject.Schema` | `s` is named, declares no parameters, every property's type renders, and every adjacency is to a named relation | the module has a class named after `s` | `frozen`: `bool` |
+| `Entry` | `r`: `Schemas.OfRelation.Schema` | `r` is named, declares no parameters, every property's type renders, and every link is declared by an object schema | the module has a class named after `r` | none |
+| `Schema` | `c`: `Programs.Python.ClassDef` | `c` is decorated `@dataclass` or `@dataclass(...)` | a relation named after `c` has its links, or an object schema named after `c` has a property or adjacency per field, is `ref` where `c` is `eq=False`, and is described where `c` has a docstring | none |
 
 - **A class is one step**, with all its fields: its one decision is `frozen`, and the fields follow from the schema.
   A symbol binds a schema, never a property: a property is a value within a schema, read with `get`, quantified over
@@ -54,20 +55,20 @@ requires.
   spelling, not a loss.
 - **Completeness is reported**: `Types.missing(session)` lists the object schemas no class renders, in name order, so
   a field naming one of them (a schema renders by naming any object schema) is seen, not silently left undefined.
-- **Relations are container fields**, as mbse-schemas' older Python adapter maps them. An adjacency to a named relation
-  of two links, from its first link, is a field: `set[E]` where the relation has no properties, `list[E]` where it has
-  one `index: int`, `dict[K, E]` where it has one other basic native, unique in its second link but for a set; `E` the
-  object schemas that declare an adjacency via the second link, each a reference object schema (`A | B` for several).
-  The adjacency from the second link has no field: it declares the types the first holds. A relation with more links,
-  more properties, other uniques or parameters, or a value object schema at its second link, has no container form,
-  and its schema no candidate. Since a property cannot hold a reference object, reading back is unambiguous: a container
-  of reference object classes (`eq=False`) is a relation, of value classes a list property.
-- **What a relation is not as its field says is kept in the field's metadata**, which dataclasses keep for such tools:
-  `field(default=None, metadata={"relation": "Listed", "links": ["directory", "contact"], "back": "directories"})`.
-  The field says `ContactAddresses` (its class and its name), links `owner` and `item`, the key `key`, each target's
-  adjacency back `contact_addresses` (a dict by type where they differ), and unique in `item` but for a set; metadata
-  holds each that differs, so both round trips keep relations as they were. A schema read back has its own adjacencies
-  first, then those other classes' fields give it, in reading order: the order Python can say.
+- **Objects read alike, whatever implements them.** Generated classes have the members mbse-schemas' proxies have, so
+  that code written against one works on the other without change: a property is a field, and an adjacency one field
+  named after it, holding its entries (`phones: tuple[Phones, ...] = ()`; any iterable would do, and a set sorted by a
+  comparator, which would serve retrieval, is an open question). Both ends of a relation have their field.
+- **A relation is the class of its entries**, named after it (`Entry`): a field per link, typed by the object schemas
+  that declare an adjacency via it (`phone: Pager | Phone | None = None`), then one per property, its class variables
+  `LINKS` and `UNIQUES` saying which fields are links and what is unique, its docstring its description. An entry is
+  one object, in the tuples of each object it links. On the wire an entry is written in its adjacency's form, without
+  the link the adjacency implies; in a class, every link is a field, any of which may be `None`.
+- **An adjacency field says its link only where it is ambiguous**: reading back takes the one link of the entry class
+  typed by the owner, and where a schema declares adjacencies via several links of one relation (a self-relation,
+  `Person.children` and `Person.parents` through `Parentage`), each field's metadata names its link:
+  `field(default=(), metadata={"me": "parent"})`. A relation the store holds, with no class in the module, needs it
+  too.
 - **A field is optional**, as every property is (mbse-schemas: nothing is mandatory but by a constraint):
   `name: str | None = None`. `from __future__ import annotations` lets a field name a class defined later.
 - **A reference object schema compares by identity**: `@dataclass(eq=False)`, read back as `ref`. A schema's
@@ -98,11 +99,9 @@ requires.
   mbse-schemas has not built yet; value parameters (an extent's bound) have no Python construct.
 - **Runtime bindings.** The generated classes hold relations as containers, but are not bound to a store: generating
   mbse-schemas' `Bindings` beside them would let them serialize, validate and be queried as any store's objects.
-- **Relations without a container form**: more links (an entity per entry), several properties (an entry class), other
-  uniques (one-to-one), and value objects at the second link.
-- **Retiring the older adapter.** mbse-schemas' `Adapters/Dataclasses.py` reads live classes (inherited fields,
-  `ClassVar`, resolved hints) and compiles classes; codegen reads and writes source. Retire it once codegen covers
-  what its users need, or keep it as the runtime path.
+- **Entries as a sorted set.** Any iterable holds entries; a set sorted by a comparator would serve retrieval.
+- **The older adapter.** mbse-schemas' `Adapters/Dataclasses.py` maps containers of dataclasses to relations, as
+  0.5 did and 0.6 no longer does; its classes do not read as proxies. Retire it, or bring it to entry classes.
 - **Named natives and other formats.** A named native (`Word`) has no class: a `NewType`, or a type alias, is one
   more transform. Natives of other formats (`ccpp`) and widths (bits, bytes) have no Python form yet.
 - **Extents.** A bounded list (`.extent(0, 9)`) could be `Annotated[list[T], ...]` with a marker, or a check in
@@ -119,8 +118,9 @@ requires.
 - One transform per class, not per field: a step is a decision, and a field has none yet.
 - No silent loss (0.3): a property type or an extent `Dataclass` cannot render faithfully makes its schema have no
   candidate, and `missing` reports it.
-- Relations render as container fields (0.5), as the older adapter maps them, with metadata keeping what the field
-  does not say, so neither round trip loses a relation.
+- Relations render as entry classes, and adjacencies as fields holding entries, on both ends (0.6), so that generated
+  classes read as mbse-schemas' proxies do (0.8.3) and code works on either without change. It replaces 0.5's
+  container fields (the older adapter's mapping), which hid the entries and differed from proxies.
 - Names Python cannot spell are written as they are, flagged by mbse-programs' validation (which already holds any
   spelling and flags those), and an error only when the source is taken (0.4), so that a step may still configure
   them. Keyed lists and nested lists render, as mbse-schemas' older Python adapter

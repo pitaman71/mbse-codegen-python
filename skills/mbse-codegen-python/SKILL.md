@@ -38,6 +38,29 @@ assert [(step.by, dict(step.arguments)) for step in session.steps] == [("caller"
 read = Types.read(Python312.parse(Types.text(session)))
 contact = read.store.stores[0].store.registered("Contact")
 assert contact.ref and list(contact.properties) == ["name", "home"]
+
+# A relation is the class of its entries, and an adjacency a field holding them: code reads proxies and classes alike.
+Owns = S.OfRelation.Builder().name("Owns").links("owner", "item").properties(lambda p: p.name("since").of(
+    lambda t: t.as_native(int))).create()
+Owner = S.OfObject.Builder().name("Owner").ref().relations(lambda r: r.name("items").of(Owns).me("owner")).create()
+Item = S.OfObject.Builder().name("Item").ref().relations(lambda r: r.name("owners").of(Owns).me("item")).create()
+owning = Proxies.OfStore()
+for schema in (Owner, Item, Owns):
+    owning.register(schema)
+source = Types.text(Types.generate(owning))
+assert "    items: tuple[Owns, ...] = ()" in source and '    LINKS: ClassVar[tuple[str, ...]] = ("owner", "item")' in source
+
+
+def years(owner):
+    return [entry.since for entry in owner.items]  # written once, for proxies and generated classes
+
+
+classes: dict = {}
+exec(source, classes)
+owner, item = classes["Owner"](), classes["Item"]()
+owner.items = item.owners = (classes["Owns"](owner=owner, item=item, since=2020),)
+proxy = owning.Owner().items(lambda e: e.item(owning.Item().create()).since(2020)).create()
+assert years(owner) == years(proxy) == [2020]
 ```
 
 ```typescript
@@ -71,6 +94,18 @@ check(session.steps.map((step) => step.by).join() === "caller,policy", "decided"
 const read = Types.read(Python312.parse(Types.text(session)) as never);
 const contact = (read.store as any).stores[0].store.registered("Contact");
 check(contact.ref && [...contact.properties.keys()].join() === "name,home", "read");
+
+// A relation is the class of its entries, and an adjacency a field holding them, read as proxies read theirs.
+const Owns = new S.OfRelation.Builder().name("Owns").links("owner", "item").properties((p) => p.name("since").of(
+  (t) => t.as_native(BigInt))).create();
+const Owner = new S.OfObject.Builder().name("Owner").ref().relations((r) => r.name("items").of(Owns).me("owner")).create();
+const Item = new S.OfObject.Builder().name("Item").ref().relations((r) => r.name("owners").of(Owns).me("item")).create();
+const owning = new Proxies.OfStore() as any;
+for (const schema of [Owner, Item, Owns]) owning.register(schema);
+const source = Types.text(Types.generate(owning));
+check(source.includes("    items: tuple[Owns, ...] = ()") && source.includes('    LINKS: ClassVar[tuple[str, ...]] = ("owner", "item")'), "entries");
+const proxy = owning.Owner().items((e: any) => e.item(owning.Item().create()).since(2020n)).create();
+check(proxy.items.map((entry: any) => entry.since).join() === "2020", "proxies"); // as the generated Python reads `owner.items`
 ```
 
 ## Practices
@@ -83,10 +118,10 @@ check(contact.ref && [...contact.properties.keys()].join() === "name,home", "rea
    without extents. Names are written as the schemas have them (a keyword property becomes `from_`): one Python cannot
    spell is in `Types.problems(session)`, and `Types.text(session)` raises `ValueError` while any remain. A reference
    object schema is `@dataclass(eq=False)`; a description is the class's docstring. Every field is optional: `name: T | None
-   = None`. Classes are in name order. A relation of two links is a container field from its first link: `set[E]`,
-   `list[E]` (an `index: int`) or `dict[K, E]` (another native key), `E` the reference object classes at its second
-   link, with `field(default=None, metadata={...})` keeping what is not as the field says (relation name, links, key,
-   backs, uniques). `Types.missing(session)` lists the object schemas left without a class.
+   = None`. Classes are in name order. A relation is the class of its entries (`Entry`): a field per link, typed by the classes that declare it, then
+   its properties, with class variables `LINKS` and `UNIQUES`; each adjacency, on both ends, is one field named after it
+   holding its entries (`phones: tuple[Phones, ...] = ()`), so code reads proxies and generated classes alike
+   (`for entry in contact.phones: entry.phone.number`). `Types.missing(session)` lists the object schemas left without a class.
 3. **What reads back.** A `@dataclass` class (`@dataclass(...)` too) whose annotations are written as `Dataclass`
    writes them, `| None` or not; anything else raises `ValueError` naming the field. Reading registers the schemas in
    the store given, and fills a schema a field names when its class is read.
