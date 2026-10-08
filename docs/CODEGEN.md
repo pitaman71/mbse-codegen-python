@@ -69,6 +69,8 @@ requires.
   `Person.children` and `Person.parents` through `Parentage`), each field's metadata names its link:
   `field(default=(), metadata={"me": "parent"})`. A relation the store holds, with no class in the module, needs it
   too.
+- **Absent reads as `None`** on both: a generated field defaults to `None`, and a proxy reads a property that is not set
+  as `None` (mbse-schemas 0.8.4), so code that handles a missing value works on either.
 - **A field is optional**, as every property is (mbse-schemas: nothing is mandatory but by a constraint):
   `name: str | None = None`. `from __future__ import annotations` lets a field name a class defined later.
 - **A reference object schema compares by identity**: `@dataclass(eq=False)`, read back as `ref`. A schema's

@@ -16,7 +16,7 @@
   },
   "mbse-schemas": {
     "repository": "git@github.com:pitaman71/mbse-schemas.git",
-    "version": "0.8.3",
-    "commit": "f3d2befa889b6b6f26bfa1f25602d41bbafc4647"
+    "version": "0.8.4",
+    "commit": "36a52b318fe280cbfec2ad3d5ead5a95d72bcead"
   }
 }
