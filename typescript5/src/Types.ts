@@ -9,7 +9,7 @@
  *   (`name: str | None = None`), then one per adjacency, named after it, holding its entries (`phones: tuple[Phones, ...]
  *   = ()`); its parameter `frozen` (a `bool`) is the decision. It applies where `s` is named, declares no parameters, every
  *   property's type renders (a basic native, a named object schema, or a list of them without an extent, positional or
- *   keyed by a basic native, nested `DEPTH` deep) and every adjacency is to a named relation. A reference object schema
+ *   keyed by a basic native, nested to any depth) and every adjacency is to a named relation. A reference object schema
  *   compares by identity (`eq=False`), and a schema's description is the class's docstring. Where a schema declares
  *   adjacencies via several links of one relation (a self-relation), each field's metadata names its link (`"me"`).
  * - `Union` and `Intersection` render a named union or intersection as a value class of a dataclass field per branch or
@@ -50,8 +50,6 @@ export const NATIVES = ["bool", "int", "float", "str", "bytes"];
 export const KEYWORDS = ["False", "None", "True", "and", "as", "assert", "async", "await", "break", "class", "continue",
   "def", "del", "elif", "else", "except", "finally", "for", "from", "global", "if", "import", "in", "is", "lambda",
   "nonlocal", "not", "or", "pass", "raise", "return", "try", "while", "with", "yield"];
-/** How deeply lists nest in a field's type (`list[list[int]]` is 2). */
-export const DEPTH = 4;
 
 export const Generated = new S.OfRelation.Builder().name("Codegen.Generated").links("output", "module").create();
 const OutputSchema = new S.OfObject.Builder().name(OUTPUT).ref().singleton(OUTPUT).relations(
@@ -122,14 +120,16 @@ function simple(type: E.Writer): E.Writer {
   return basic(type).or_(E.operation("and", type.has("named"), E.operation("or", objects, E.operation("or", unions, intersections))));
 }
 
-/** A type `Dataclass` renders: a simple one, or a list without an extent of one it renders, positional or keyed by a
- * basic native, nested `depth` deep at most. */
-function rendered(type: E.Writer, depth = DEPTH): E.Writer {
-  if (depth === 0) return simple(type);
-  const indexed = type.get("indexed");
-  const keyed = indexed.has("key").not_().or_(basic(indexed.get("key")));
-  return simple(type).or_(type.has("indexed").and_(indexed.has("extent").not_()).and_(keyed).and_(
-    rendered(indexed.get("item"), depth - 1)));
+/** Whether `Dataclass` renders a type `t`: a simple one, or a list without an extent of one it renders, positional or
+ * keyed by a basic native, nested to any depth. It applies itself to the list's item. */
+export const Rendered = new P.OfPredicate.Builder().name("Codegen.Rendered").parameters((q) => q.name("t")).create();
+new P.OfPredicate.Builder(Rendered).requires(simple(t).or_(t.has("indexed").and_(t.get("indexed").has("extent").not_()).and_(
+  t.get("indexed").has("key").not_().or_(basic(t.get("indexed").get("key")))).and_(
+  Rendered.call(t.get("indexed").get("item")) as never))).update();
+
+/** Whether `Dataclass` renders the type: `Rendered` applied to it. */
+function rendered(type: E.Writer): any {
+  return Rendered.call(type);
 }
 
 function over(symbols: Record<string, S.OfObject.Data>, constraint: unknown) {

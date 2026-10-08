@@ -1,5 +1,5 @@
 <!-- nav -->
-[← mbse-codegen-python](README.md) · [Code generation for Python →](docs/CODEGEN.md)
+[← mbse-codegen-python](README.md) · [Bridges for types →](docs/BRIDGES.md)
 
 # Why the mbse repositories exist
 
@@ -51,4 +51,4 @@ What a specification requires is a *constraint*, never a "rule".
 ---
 
 <!-- nav -->
-[← mbse-codegen-python](README.md) · [Code generation for Python →](docs/CODEGEN.md)
+[← mbse-codegen-python](README.md) · [Bridges for types →](docs/BRIDGES.md)

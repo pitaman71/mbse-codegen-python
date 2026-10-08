@@ -114,7 +114,7 @@ check(proxy.items.map((entry: any) => entry.since).join() === "2020", "proxies")
    {"frozen": False}))`, `Types.PLAIN`) ranks the candidates, and `session.take(candidate)` is the caller deciding.
    `session.steps` is the trace, and `session.trace(...)` writes it as data.
 2. **What renders.** A named object schema without parameters, whose properties are basic natives, named
-   object schemas, or lists of them (`list[T]`, `dict[K, V]` keyed by a basic native, nested up to `Types.DEPTH`),
+   object schemas, or lists of them (`list[T]`, `dict[K, V]` keyed by a basic native, nested to any depth),
    without extents. Names are written as the schemas have them (a keyword property becomes `from_`): one Python cannot
    spell is in `Types.problems(session)`, and `Types.text(session)` raises `ValueError` while any remain. A reference
    object schema is `@dataclass(eq=False)`; a description is the class's docstring. Every field is optional: `name: T | None

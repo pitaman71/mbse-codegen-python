@@ -8,7 +8,7 @@ singleton `Codegen.Output` holds the module written or read. Each step is one de
   (`name: str | None = None`), then one per adjacency, named after it, holding its entries (`phones: tuple[Phones, ...]
   = ()`); its parameter `frozen` (a `bool`) is the decision. It applies where `s` is named, declares no parameters, every
   property's type renders (a basic native, a named object schema, or a list of them without an extent, positional or
-  keyed by a basic native, nested `DEPTH` deep) and every adjacency is to a named relation. A reference object schema
+  keyed by a basic native, nested to any depth) and every adjacency is to a named relation. A reference object schema
   compares by identity (`eq=False`), and a schema's description is the class's docstring. Where a schema declares
   adjacencies via several links of one relation (a self-relation), each field's metadata names its link (`"me"`).
 - `Union` and `Intersection` render a named union or intersection as a value class of a dataclass field per branch or
@@ -48,7 +48,7 @@ from mbse.Patterns import Predicates as P, Transforms as T
 from mbse.Programs.Python import Python312, Syntax as Py
 from mbse.Schemas.Framework import Bindings, Proxies, Reflection, Schemas as S, Stores
 
-__all__ = ["OUTPUT", "NATIVES", "KEYWORDS", "DEPTH", "Output", "Generated", "store", "Dataclass", "Entry", "Union",
+__all__ = ["OUTPUT", "NATIVES", "KEYWORDS", "Rendered", "Output", "Generated", "store", "Dataclass", "Entry", "Union",
            "Intersection", "Alias", "Schema", "FlatUnion", "TO_PYTHON",
            "FROM_PYTHON", "PLAIN", "missing", "problems",
            "generate", "read", "text"]
@@ -60,8 +60,6 @@ KEYWORDS = ("False", "None", "True", "and", "as", "assert", "async", "await", "b
             "elif", "else", "except", "finally", "for", "from", "global", "if", "import", "in", "is", "lambda",
             "nonlocal", "not", "or", "pass", "raise", "return", "try", "while", "with", "yield")
 """Python's keywords: a field so named is written with a trailing underscore (`from_`), and read back without it."""
-DEPTH = 4
-"""How deeply lists nest in a field's type (`list[list[int]]` is 2)."""
 
 Generated = S.OfRelation.Builder().name("Codegen.Generated").links("output", "module").create()
 _OutputSchema = S.OfObject.Builder().name(OUTPUT).ref().singleton(OUTPUT).relations(
@@ -129,15 +127,17 @@ def _simple(type_: E.Writer) -> E.Writer:
         "or", named[1], named[2]))))
 
 
-def _rendered(type_: E.Writer, depth: int = DEPTH) -> E.Writer:
-    """A type `Dataclass` renders: a simple one, or a list without an extent of one it renders, positional or keyed by a
-    basic native, nested `depth` deep at most."""
-    if depth == 0:
-        return _simple(type_)
-    indexed = type_.get("indexed")
-    keyed = indexed.has("key").not_().or_(_basic(indexed.get("key")))
-    return _simple(type_).or_(type_.has("indexed").and_(indexed.has("extent").not_()).and_(keyed).and_(
-        _rendered(indexed.get("item"), depth - 1)))
+Rendered = P.OfPredicate.Builder().name("Codegen.Rendered").parameters(lambda q: q.name("t")).create()
+"""Whether `Dataclass` renders a type `t`: a simple one, or a list without an extent of one it renders, positional or
+keyed by a basic native, nested to any depth. It applies itself to the list's item."""
+P.OfPredicate.Builder(Rendered).requires(_simple(t).or_(t.has("indexed").and_(t.get("indexed").has("extent").not_()).and_(
+    t.get("indexed").has("key").not_().or_(_basic(t.get("indexed").get("key")))).and_(
+    Rendered(t.get("indexed").get("item"))))).update()
+
+
+def _rendered(type_: E.Writer) -> Any:
+    """Whether `Dataclass` renders the type: `Rendered` applied to it."""
+    return Rendered(type_)
 
 
 def _over(symbols: dict[str, Any], constraint: Any) -> P.OfPredicate.Data:

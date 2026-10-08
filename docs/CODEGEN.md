@@ -1,5 +1,5 @@
 <!-- nav -->
-[← Why the mbse repositories exist](../MBSE.md) · [Home](../README.md) · [Equivalence →](EQUIVALENCE.md)
+[← Bridges for types](BRIDGES.md) · [Home](../README.md) · [Equivalence →](EQUIVALENCE.md)
 
 # Code generation for Python
 
@@ -49,7 +49,8 @@ requires.
   there is one to take, will be a parameter of the schema's step.
 - **What renders**: a basic native as Python's name for it (`str`, `int`, `float`, `bool`, `bytes`), a named
   object schema, union or intersection by its name, a positional list as `list[...]` and a list keyed by a basic
-  native as `dict[K, V]`, of any of these, nested four deep at most (`DEPTH`). A list with an extent has no Python form
+  native as `dict[K, V]`, of any of these, nested to any depth: `Types.Rendered` is a predicate that applies itself to a
+  list's item (mbse-patterns 0.8.2). A list with an extent has no Python form
   yet, and a named native or application no class: a schema with such a property has no candidate, rather than a
   dataclass field that names nothing.
 - **Names are written as the schemas have them**, so that a step can still configure them; a name Python cannot spell
@@ -148,4 +149,4 @@ requires.
 ---
 
 <!-- nav -->
-[← Why the mbse repositories exist](../MBSE.md) · [Home](../README.md) · [Equivalence →](EQUIVALENCE.md)
+[← Bridges for types](BRIDGES.md) · [Home](../README.md) · [Equivalence →](EQUIVALENCE.md)
