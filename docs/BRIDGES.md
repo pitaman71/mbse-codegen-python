@@ -56,6 +56,7 @@ not report it, and reading back did not restore it. 0.9.1 writes and reads each,
 |---|---|---|---|
 | Named value object schema | `@dataclass` class | `frozen` | built |
 | Named reference object schema | `@dataclass(eq=False)` | `frozen` | built |
+| Slots (any class) | `@dataclass(slots=True)`: fixed attributes, no `__dict__` | `slots`: a decision of the class's step (CODEGEN.md, Resolved) | built (0.16) |
 | Singleton | `SINGLETON: ClassVar[str] = "Codegen.Output"` | none | built (0.9.1) |
 | Description | the class's docstring | none | built |
 | Property | field `name: T \| None = None` | none | built |

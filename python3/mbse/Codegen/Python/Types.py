@@ -6,7 +6,7 @@ singleton `Codegen.Output` holds the module written or read. Each step is one de
 
 - `Dataclass` renders an object schema `s` as a class of the module, with a field per property, in order, each optional
   (`name: str | None = None`), then one per adjacency, named after it, holding its entries (`phones: tuple[Phones, ...]
-  = ()`); its parameter `frozen` (a `bool`) is the decision. It applies where `s` is named, declares no parameters, every
+  = ()`); its parameters `frozen` and `slots` (each a `bool`) are the decisions. It applies where `s` is named, declares no parameters, every
   property's type renders (a basic native, a named object schema, or a list of them without an extent, positional or
   keyed by a basic native, nested to any depth) and every adjacency is to a named relation. A reference object schema
   compares by identity (`eq=False`), a schema's description is the class's docstring, a singleton's name its
@@ -14,7 +14,7 @@ singleton `Codegen.Output` holds the module written or read. Each step is one de
   adjacencies via several links of one relation (a self-relation), each field's metadata names its link (`"me"`).
 - `Union` and `Intersection` render a named union or intersection as a value class of a dataclass field per branch or
   part, each optional, as a proxy's union or intersection value reads it (`card.reach.email`); its class variable
-  `KIND` (`"union"`, `"intersection"`) says which. Their parameter `frozen` is the decision, as `Dataclass`'s. A flat
+  `KIND` (`"union"`, `"intersection"`) says which. Their parameters `frozen` and `slots` are the decisions, as `Dataclass`'s. A flat
   intersection (mbse-schemas' `flat`) is a class of its parts' properties, as a proxy reads them (`ticket.stamp.at`),
   its class variable `PARTS` saying each part's schema, or the properties of an inline one.
 - `Alias` renders a flat union as a type alias of its branches' types (`type Channel = Call | Mail`), as a proxy reads
@@ -37,8 +37,8 @@ A type with no Python form is dropped by a step of its own, one transform per re
 `Any`. A type with parameters or terms is not dropped but unbuilt (`Unbuilt`): a schema holding one has no class
 until the parametric bridge (TypeVars), and `missing(session)` reports it.
 Each step links what it wrote, by role: a `class`, an `alias`, or, reading back, a `schema` (mbse-patterns' `Wrote`).
-`generate(schemas, policy, earlier)` and `read(module, schemas)` run each to the end. `frozen` is the one thing a schema
-does not hold: reading code back loses it, and the trace of the generation keeps it. A generation given the steps of an
+`generate(schemas, policy, earlier)` and `read(module, schemas)` run each to the end. `frozen` and `slots` are what a
+schema does not hold: reading code back loses them, and the trace of the generation keeps them. A generation given the steps of an
 earlier one takes each decision again where its key (`Dataclass(s=Contact)`, by the schema's name) still occurs, so
 after a change of the schemas only a new schema asks; `session.orphans` are the decisions about schemas now gone, and
 mbse-patterns' `Transforms.diff` compares the two.
@@ -463,9 +463,17 @@ def _dotted_name(name: Any) -> str:
     return ".".join(part.spelling for part in name.names)
 
 
-def _decorator(schema: Any, frozen: bool) -> Any:
+_FROZEN = lambda q: q.name("frozen").of(lambda x: x.as_native(bool)).description("Whether the class is frozen")  # noqa: E731
+_SLOTS = lambda q: q.name("slots").of(lambda x: x.as_native(bool)).description(  # noqa: E731
+    "Whether the class has slots: fixed attributes, no `__dict__`, smaller and faster")
+
+
+def _decorator(schema: Any, frozen: bool, slots: bool) -> Any:
+    """`@dataclass`, with `eq=False` for a reference object's class (or an entry's), `frozen=True` and `slots=True` as
+    the step decided."""
     keywords = [(name, "False" if name == "eq" else "True") for name, on in (
-        ("eq", getattr(schema, "ref", False)), ("frozen", frozen)) if on]  # a union or intersection is a value
+        ("eq", getattr(schema, "ref", False) or isinstance(schema, S.OfRelation.Data)), ("frozen", frozen),
+        ("slots", slots)) if on]  # a union or intersection is a value
     if not keywords:
         return lambda b: _name(b, "dataclass")
     return lambda b: functools.reduce(
@@ -573,7 +581,8 @@ def _render(store: Stores.Combined, match: dict[str, Any], arguments: dict[str, 
             metadata["me"] = adjacency.me
         body.append(B.AnnAssign().target(lambda b, name=name: _name(b, _field(name))).annotation(entries).value(
             _default(lambda b: b.Tuple(), metadata)).create())
-    built = B.ClassDef().name(schema.name).add_decorator_list(_decorator(schema, arguments["frozen"])).create()
+    built = B.ClassDef().name(schema.name).add_decorator_list(
+        _decorator(schema, arguments["frozen"], arguments["slots"])).create()
     built.body = body or [B.Pass().create()]
     return _finish(store, built)
 
@@ -588,9 +597,7 @@ def _render_entry(store: Stores.Combined, match: dict[str, Any], arguments: dict
     body += [_optional_field(link, _union([o.name for o in _declarers(objects, relation, link) if not _itself(o)] or ["Any"]))
              for link in relation.links]
     body += [_optional_field(name, _annotation(prop.type), prop.description) for name, prop in relation.properties.items()]
-    built = B.ClassDef().name(relation.name).add_decorator_list(
-        lambda b: b.Call().func(lambda x: _name(x, "dataclass")).add_keywords(
-            lambda kw: kw.arg("eq").value(lambda x: x.Constant().spelling("False")))).create()
+    built = B.ClassDef().name(relation.name).add_decorator_list(_decorator(relation, False, arguments["slots"])).create()
     built.body = body
     return _finish(store, built)
 
@@ -694,13 +701,13 @@ def _place(module: Py.Module, built: Any) -> None:
 
 Dataclass = T.Transform(
     "Dataclass", _over({"s": S.OfObject.Schema}, _RENDERABLE), _over({"s": S.OfObject.Schema}, _HAS_CLASS),
-    [lambda q: q.name("frozen").of(lambda x: x.as_native(bool)).description("Whether the class is frozen")], _render)
+    [_FROZEN, _SLOTS], _render)
 """An object schema as a dataclass of the module."""
 
 Entry = T.Transform(
     "Entry", _over({"r": S.OfRelation.Schema}, _ENTRY_RENDERABLE), _over({"r": S.OfRelation.Schema}, P.Exists(
         lambda q: q.symbols({"o": _OutputSchema}).requires(
-            P.Contains(o.defined, lambda e: e.name == r.name and e.node.kind == "ClassDef")))), rewrite=_render_entry)
+            P.Contains(o.defined, lambda e: e.name == r.name and e.node.kind == "ClassDef")))), [_SLOTS], _render_entry)
 """A relation as the class of its entries: a field per link, typed by the object schemas that declare it, then one per
 property, and class variables `LINKS` and `UNIQUES` that say which fields are links and what is unique."""
 
@@ -789,7 +796,8 @@ def _render_variants(kind: str) -> Any:
                             lambda z: _name(z, "str"))))).value(_metadata(described)).create())
             members = [prop for part in members for prop in S.structure(part.type).properties.values()]
         body += [_optional_field(member.name, _annotation(member.type), member.description) for member in members]
-        built = B.ClassDef().name(schema.name).add_decorator_list(_decorator(schema, arguments["frozen"])).create()
+        built = B.ClassDef().name(schema.name).add_decorator_list(
+            _decorator(schema, arguments["frozen"], arguments["slots"])).create()
         built.body = body
         return _finish(store, built)
     return render
@@ -801,7 +809,7 @@ def _variants(kind: str, meta: Any) -> T.Transform:
         renderable = E.operation("or", renderable, _variants_renderable(kind, True))
     return T.Transform(
         kind.capitalize(), _over({"s": meta}, renderable), _over({"s": meta}, _HAS_CLASS),
-        [lambda q: q.name("frozen").of(lambda x: x.as_native(bool)).description("Whether the class is frozen")],
+        [_FROZEN, _SLOTS],
         _render_variants(kind))
 
 
@@ -1253,10 +1261,10 @@ DROP = _drop_transforms()
 """The drop transforms: per reason (`DROPS`), one for each kind of schema it applies to, named after the reason."""
 TO_PYTHON = (Dataclass, Entry, Union, Intersection, Alias, NativeAlias, ListAlias, *DROP)
 FROM_PYTHON = (Schema, AliasSchema)
-PLAIN = T.Policy(T.Clause("Dataclass", {"frozen": False}), T.Clause("Entry"), T.Clause("Union", {"frozen": False}),
-                 T.Clause("Intersection", {"frozen": False}), T.Clause("Alias"), T.Clause("NativeAlias"), T.Clause("ListAlias"),
+PLAIN = T.Policy(T.Clause("Dataclass", {"frozen": False, "slots": False}), T.Clause("Entry", {"slots": False}),
+                 T.Clause("Union", {"frozen": False, "slots": False}), T.Clause("Intersection", {"frozen": False, "slots": False}), T.Clause("Alias"), T.Clause("NativeAlias"), T.Clause("ListAlias"),
                  *[T.Clause(reason) for reason in DROPS])
-"""Classes that are not frozen, every relation's entry class and every alias, and every drop."""
+"""Classes that are not frozen and have no slots, every relation's entry class and every alias, and every drop."""
 
 
 

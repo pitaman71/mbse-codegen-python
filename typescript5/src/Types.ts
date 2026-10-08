@@ -7,7 +7,7 @@
  *
  * - `Dataclass` renders an object schema `s` as a class of the module, with a field per property, in order, each optional
  *   (`name: str | None = None`), then one per adjacency, named after it, holding its entries (`phones: tuple[Phones, ...]
- *   = ()`); its parameter `frozen` (a `bool`) is the decision. It applies where `s` is named, declares no parameters, every
+ *   = ()`); its parameters `frozen` and `slots` (each a `bool`) are the decisions. It applies where `s` is named, declares no parameters, every
  *   property's type renders (a basic native, a named object schema, or a list of them without an extent, positional or
  *   keyed by a basic native, nested to any depth) and every adjacency is to a named relation. A reference object schema
  *   compares by identity (`eq=False`), a schema's description is the class's docstring, a singleton's name its
@@ -15,7 +15,7 @@
  *   adjacencies via several links of one relation (a self-relation), each field's metadata names its link (`"me"`).
  * - `Union` and `Intersection` render a named union or intersection as a value class of a dataclass field per branch or
  *   part, each optional, as a proxy's union or intersection value reads it (`card.reach.email`); its class variable
- *   `KIND` (`"union"`, `"intersection"`) says which. Their parameter `frozen` is the decision, as `Dataclass`'s. A flat
+ *   `KIND` (`"union"`, `"intersection"`) says which. Their parameters `frozen` and `slots` are the decisions, as `Dataclass`'s. A flat
  *   intersection (mbse-schemas' `flat`) is a class of its parts' properties, as a proxy reads them (`ticket.stamp.at`),
  *   its class variable `PARTS` saying each part's schema, or the properties of an inline one.
  * - `Alias` renders a flat union as a type alias of its branches' types (`type Channel = Call | Mail`), as a proxy reads
@@ -38,8 +38,8 @@
  * `Any`. A type with parameters or terms is not dropped but unbuilt (`Unbuilt`): a schema holding one has no class
  * until the parametric bridge (TypeVars), and `missing(session)` reports it.
  * Each step links what it wrote, by role: a `class`, an `alias`, or, reading back, a `schema` (mbse-patterns' `Wrote`).
- * `generate(schemas, policy, earlier)` and `read(module, schemas)` run each to the end. `frozen` is the one thing a
- * schema does not hold: reading code back loses it, and the trace of the generation keeps it. A generation given the
+ * `generate(schemas, policy, earlier)` and `read(module, schemas)` run each to the end. `frozen` and `slots` are what
+ * a schema does not hold: reading code back loses them, and the trace of the generation keeps them. A generation given the
  * steps of an earlier one takes each decision again where its key (`Dataclass(s=Contact)`, by the schema's name) still
  * occurs, so after a change of the schemas only a new schema asks; `session.orphans` are the decisions about schemas
  * now gone, and mbse-patterns' `Transforms.diff` compares the two.
@@ -457,8 +457,15 @@ function dottedName(named: any): string {
   return named.names.map((part: any) => part.spelling).join(".");
 }
 
-function decorator(schema: any, frozen: boolean): (b: any) => any {
-  const keywords = ([["eq", schema.ref === true], ["frozen", frozen]] as [string, boolean][]).filter(([, on]) => on) // a union or intersection is a value
+const FROZEN = (q: any) => q.name("frozen").of((x: any) => x.as_native(Boolean)).description("Whether the class is frozen");
+const SLOTS = (q: any) => q.name("slots").of((x: any) => x.as_native(Boolean)).description(
+  "Whether the class has slots: fixed attributes, no `__dict__`, smaller and faster");
+
+/** `@dataclass`, with `eq=False` for a reference object's class (or an entry's), `frozen=True` and `slots=True` as the
+ * step decided. */
+function decorator(schema: any, frozen: boolean, slots: boolean): (b: any) => any {
+  const keywords = ([["eq", schema.ref === true || schema instanceof S.OfRelation.Data], ["frozen", frozen], ["slots", slots]] as [string, boolean][])
+    .filter(([, on]) => on) // a union or intersection is a value
     .map(([key]) => [key, key === "eq" ? "False" : "True"]);
   if (keywords.length === 0) return (b) => name(b, "dataclass");
   return (b) => keywords.reduce((built, [a, v]) => built.add_keywords((w: any) => w.arg(a).value((x: any) => x.Constant().spelling(v))),
@@ -565,12 +572,12 @@ function render(store: Stores.Combined, match: Record<string, unknown>, args: Re
     body.push(B.AnnAssign().target((b: any) => name(b, field(named))).annotation(entries).value(
       defaultOf((b: any) => b.Tuple(), metadata)).create());
   }
-  const built = B.ClassDef().name(schema.name).add_decorator_list(decorator(schema, args["frozen"] as boolean)).create();
+  const built = B.ClassDef().name(schema.name).add_decorator_list(decorator(schema, args["frozen"] as boolean, args["slots"] as boolean)).create();
   built.body = body.length > 0 ? body : [B.Pass().create()];
   return finish(store, built);
 }
 
-function renderEntry(store: Stores.Combined, match: Record<string, unknown>): Map<string, unknown> {
+function renderEntry(store: Stores.Combined, match: Record<string, unknown>, args: Record<string, unknown>): Map<string, unknown> {
   const relation = match["r"] as S.OfRelation.Data;
   const B = Py.LANGUAGE.Builders as any;
   const objects = [...store.extent("Schemas.Object")] as any[];
@@ -582,8 +589,7 @@ function renderEntry(store: Stores.Combined, match: Record<string, unknown>): Ma
       return optionalField(link, union(declaring.length > 0 ? declaring : ["Any"]));
     }),
     ...[...relation.properties].map(([named, property]) => optionalField(named, annotation(property.type), property.description))];
-  const built = B.ClassDef().name(relation.name).add_decorator_list((b: any) => b.Call().func((x: any) => name(x, "dataclass"))
-    .add_keywords((kw: any) => kw.arg("eq").value((x: any) => x.Constant().spelling("False")))).create();
+  const built = B.ClassDef().name(relation.name).add_decorator_list(decorator(relation, false, args["slots"] as boolean)).create();
   built.body = body;
   return finish(store, built);
 }
@@ -685,7 +691,7 @@ function place(module: Py.Module, built: any): void {
 /** An object schema as a dataclass of the module. */
 export const Dataclass = new T.Transform("Dataclass", over({ s: S.OfObject.Schema }, RENDERABLE),
   over({ s: S.OfObject.Schema }, HAS_CLASS), {
-    parameters: [(q) => q.name("frozen").of((x) => x.as_native(Boolean)).description("Whether the class is frozen")],
+    parameters: [FROZEN, SLOTS],
     rewrite: render as never,
   });
 
@@ -694,7 +700,7 @@ export const Dataclass = new T.Transform("Dataclass", over({ s: S.OfObject.Schem
 export const Entry = new T.Transform("Entry", over({ r: S.OfRelation.Schema as any }, ENTRY_RENDERABLE),
   over({ r: S.OfRelation.Schema as any }, P.Exists((q) => q.symbols({ o: OutputSchema }).requires(
     P.Contains(o.get("defined"), (e) => e.get("name").eq(r.name).and_(e.get("node").get("kind").eq("ClassDef")))))),
-  { rewrite: renderEntry as never });
+  { parameters: [SLOTS], rewrite: renderEntry as never });
 
 /** Where a union's and an intersection's members are, in their module form and their data. */
 const MEMBERS: Record<string, string> = { union: "branches", intersection: "parts" };
@@ -776,7 +782,7 @@ function renderVariants(kind: string) {
       members = members.flatMap((part) => [...(S.structure(part.type) as any).properties.values()]);
     }
     body.push(...members.map((member) => optionalField(member.name, annotation(member.type), member.description)));
-    const built = B.ClassDef().name(schema.name).add_decorator_list(decorator(schema, args["frozen"] as boolean)).create();
+    const built = B.ClassDef().name(schema.name).add_decorator_list(decorator(schema, args["frozen"] as boolean, args["slots"] as boolean)).create();
     built.body = body;
     return finish(store, built);
   };
@@ -787,7 +793,7 @@ function variants(kind: string, meta: any): T.Transform {
     : variantsRenderable(kind, false);
   return new T.Transform(kind.slice(0, 1).toUpperCase() + kind.slice(1), over({ s: meta }, renderable),
     over({ s: meta }, HAS_CLASS), {
-      parameters: [(q) => q.name("frozen").of((x) => x.as_native(Boolean)).description("Whether the class is frozen")],
+      parameters: [FROZEN, SLOTS],
       rewrite: renderVariants(kind) as never,
     });
 }
@@ -1211,9 +1217,9 @@ export const Schema = new T.Transform("Schema", over({ c: Py.ClassDef.Schema }, 
 export const DROP = dropTransforms();
 export const TO_PYTHON = [Dataclass, Entry, Union, Intersection, Alias, NativeAlias, ListAlias, ...DROP];
 export const FROM_PYTHON = [Schema, AliasSchema];
-/** Classes that are not frozen, every relation's entry class and every alias, and every drop. */
-export const PLAIN = new T.Policy(new T.Clause("Dataclass", { frozen: false }), new T.Clause("Entry"),
-  new T.Clause("Union", { frozen: false }), new T.Clause("Intersection", { frozen: false }), new T.Clause("Alias"),
+/** Classes that are not frozen and have no slots, every relation's entry class and every alias, and every drop. */
+export const PLAIN = new T.Policy(new T.Clause("Dataclass", { frozen: false, slots: false }), new T.Clause("Entry", { slots: false }),
+  new T.Clause("Union", { frozen: false, slots: false }), new T.Clause("Intersection", { frozen: false, slots: false }), new T.Clause("Alias"),
   new T.Clause("NativeAlias"), new T.Clause("ListAlias"), ...Object.keys(DROPS).map((reason) => new T.Clause(reason)));
 
 /** A session that renders the schemas `schemas` registers, and those they refer to, as the dataclasses of a new module,

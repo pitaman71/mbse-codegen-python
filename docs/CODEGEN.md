@@ -35,18 +35,19 @@ requires.
 
 | Transform | Symbols | Before | After | Parameters |
 |---|---|---|---|---|
-| `Dataclass` | `s`: `Schemas.OfObject.Schema` | `s` is named, declares no parameters, holds no unbuilt type (`Types.Unbuilt`: parameters or terms), and has no adjacency to a relation declaring parameters | the module has a class named after `s` | `frozen`: `bool` |
-| `Union` | `s`: `Schemas.OfUnion.Schema` | `s` is named, not `flat`, declares no parameters, has branches, and holds no unbuilt type (`Types.Unbuilt`: parameters or terms) | the module has a class named after `s` | `frozen`: `bool` |
-| `Intersection` | `s`: `Schemas.OfIntersection.Schema` | `s` is named, declares no parameters, has parts, and holds no unbuilt type (`Types.Unbuilt`: parameters or terms), its inline parts' properties included where `flat` | the module has a class named after `s` | `frozen`: `bool` |
+| `Dataclass` | `s`: `Schemas.OfObject.Schema` | `s` is named, declares no parameters, holds no unbuilt type (`Types.Unbuilt`: parameters or terms), and has no adjacency to a relation declaring parameters | the module has a class named after `s` | `frozen`: `bool`; `slots`: `bool` |
+| `Union` | `s`: `Schemas.OfUnion.Schema` | `s` is named, not `flat`, declares no parameters, has branches, and holds no unbuilt type (`Types.Unbuilt`: parameters or terms) | the module has a class named after `s` | `frozen`: `bool`; `slots`: `bool` |
+| `Intersection` | `s`: `Schemas.OfIntersection.Schema` | `s` is named, declares no parameters, has parts, and holds no unbuilt type (`Types.Unbuilt`: parameters or terms), its inline parts' properties included where `flat` | the module has a class named after `s` | `frozen`: `bool`; `slots`: `bool` |
 | `Alias` | `s`: `Schemas.OfUnion.Schema` | `s` is named, `flat`, declares no parameters, has branches, and holds no unbuilt type (`Types.Unbuilt`: parameters or terms) | the module has a type alias named after `s` | none |
-| `Entry` | `r`: `Schemas.OfRelation.Schema` | `r` is named, declares no parameters, holds no unbuilt type (`Types.Unbuilt`: parameters or terms), and no link is declared by an object schema declaring parameters | the module has a class named after `r` | none |
+| `Entry` | `r`: `Schemas.OfRelation.Schema` | `r` is named, declares no parameters, holds no unbuilt type (`Types.Unbuilt`: parameters or terms), and no link is declared by an object schema declaring parameters | the module has a class named after `r` | `slots`: `bool` |
 | `Schema` | `c`: `Programs.Python.ClassDef` | `c` is decorated `@dataclass` or `@dataclass(...)` | a relation named after `c` has its links, or an object schema named after `c` has a property or adjacency per field, is `ref` where `c` is `eq=False`, and is described where `c` has a docstring | none |
 | `NativeAlias` | `s`: `Schemas.OfNative.Schema` | `s` is named, declares no parameters, is a basic or a `python3` native, and its width is no term | the module has a type alias named after `s` | none |
 | `ListAlias` | `s`: `Schemas.OfIndexed.Schema` | `s` is named, declares no parameters, its extent is of int bounds if any, and its item and key are not unbuilt | the module has a type alias named after `s` | none |
 | `AliasSchema` | `al`: `Programs.Python.TypeAlias` | always | a schema named after `al` has been read: a union with branches, a native with a token, or a list with an item | none |
 | `DropInline`, `DropFormat`, `DropUndeclared` | `s` (`r` for a relation): a meta-schema of each kind a reason applies to | `s` is named and holds a type dropped for the reason (an inline object, union, intersection or relation; another format's native; a link no object schema declares), or, `DropFormat`, is another format's native | the output records the drop (`Codegen.Dropped`): `s`, the reason, and where | none |
 
-- **A class is one step**, with all its fields: its one decision is `frozen`, and the fields follow from the schema.
+- **A class is one step**, with all its fields: its decisions are `frozen` and `slots` (an entry class's, `slots`; see
+  Resolved), and the fields follow from the schema.
   A symbol binds a schema, never a property: a property is a value within a schema, read with `get`, quantified over
   (`s.get("properties").all(...)`) and compared deeply (mbse-expressions' Basic). A decision about one property, when
   there is one to take, will be a parameter of the schema's step.
@@ -161,7 +162,7 @@ requires.
   decided otherwise (mbse-patterns 0.8).
 - **Round trips are laws, tested both ways.** Schemas to source to schemas gives the same schemas, compared as their
   modules' JSON; source to schemas to source gives the source as mbse-programs' Python 3.12 prints it, taking the same
-  decisions again. `frozen` is the one thing a schema does not hold: the trace of the generation keeps it.
+  decisions again. `frozen` and `slots` are what a schema does not hold: the trace of the generation keeps them.
 
 ## Open questions
 
@@ -193,6 +194,13 @@ requires.
   beside the classes) is Codegen/Patterns' work, with the constraints.
 
 ## Resolved
+
+- **Slotting is a transform decision**, as the user decided: whether a class has slots (`@dataclass(slots=True)`:
+  fixed attributes in place of a per-instance `__dict__`, smaller and faster, a misspelled attribute refused) is a
+  parameter of the step that writes it, `slots` (a `bool`), of `Dataclass`, `Union`, `Intersection` and `Entry`, not a
+  rule for every class (0.16). `Types.PLAIN` takes `slots=False`, so its output is as before; a policy clause
+  (`T.Clause("Dataclass", {"slots": True})`) or the caller decides otherwise. A schema does not hold it: reading back
+  loses it, and the trace keeps it, as `frozen`.
 
 - **Parametric schemas are not dropped**, as the user decided: "DropParametric? Absolutely not." Parameters stay
   parameters in generated code (mbse-schemas' FRAMEWORK.md, Parametrics), and a parametric schema uses TypeVars. Nor

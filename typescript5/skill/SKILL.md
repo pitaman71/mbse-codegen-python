@@ -22,19 +22,20 @@ Contact = S.OfObject.Builder().name("Contact").ref().properties(
 schemas = Proxies.OfStore()
 schemas.register(Contact)  # Phone, which Contact refers to, is rendered too
 
-# Every decision by a policy: here, no class is frozen.
+# Every decision by a policy: here, no class is frozen or has slots.
 assert Types.text(Types.generate(schemas)) == (
     "from __future__ import annotations\nfrom dataclasses import dataclass\n\n\n@dataclass(eq=False)\nclass Contact:\n"
     "    name: str | None = None\n    home: Phone | None = None\n\n\n@dataclass\nclass Phone:\n    number: str | None = None\n")
 
 # Or one decision at a time: the caller takes a candidate, and a policy takes the rest.
 session = T.Session(Types.store(schemas, Python312.parse("")), list(Types.TO_PYTHON))
-session.take(next(c for c in session.candidates() if c.match["s"] is Phone and c.arguments["frozen"]))
+session.take(next(c for c in session.candidates() if c.match["s"] is Phone and c.arguments == {"frozen": True, "slots": True}))
 session.run(Types.PLAIN)
-assert "@dataclass(frozen=True)\nclass Phone:" in Types.text(session)
-assert [(step.by, dict(step.arguments)) for step in session.steps] == [("caller", {"frozen": True}), ("policy", {"frozen": False})]
+assert "@dataclass(frozen=True, slots=True)\nclass Phone:" in Types.text(session)
+assert [(step.by, dict(step.arguments)) for step in session.steps] == [
+    ("caller", {"frozen": True, "slots": True}), ("policy", {"frozen": False, "slots": False})]
 
-# Read the source back: the same schemas, frozen aside (the trace keeps it).
+# Read the source back: the same schemas, frozen and slots aside (the trace keeps them).
 read = Types.read(Python312.parse(Types.text(session)))
 contact = read.store.stores[0].store.registered("Contact")
 assert contact.ref and list(contact.properties) == ["name", "home"]
@@ -78,19 +79,19 @@ const Contact = new S.OfObject.Builder().name("Contact").ref().properties(
 const schemas = new Proxies.OfStore();
 schemas.register(Contact); // Phone, which Contact refers to, is rendered too
 
-// Every decision by a policy: here, no class is frozen.
+// Every decision by a policy: here, no class is frozen or has slots.
 check(Types.text(Types.generate(schemas)) ===
   "from __future__ import annotations\nfrom dataclasses import dataclass\n\n\n@dataclass(eq=False)\nclass Contact:\n" +
   "    name: str | None = None\n    home: Phone | None = None\n\n\n@dataclass\nclass Phone:\n    number: str | None = None\n", "generated");
 
 // Or one decision at a time: the caller takes a candidate, and a policy takes the rest.
 const session = new T.Session(Types.store(schemas, Python312.parse("") as never), [...Types.TO_PYTHON]);
-session.take(session.candidates().find((c) => c.match["s"] === Phone && c.arguments["frozen"] === true) as T.Candidate);
+session.take(session.candidates().find((c) => c.match["s"] === Phone && c.arguments["frozen"] === true && c.arguments["slots"] === true) as T.Candidate);
 session.run(Types.PLAIN);
-check(Types.text(session).includes("@dataclass(frozen=True)\nclass Phone:"), "frozen");
+check(Types.text(session).includes("@dataclass(frozen=True, slots=True)\nclass Phone:"), "frozen, slots");
 check(session.steps.map((step) => step.by).join() === "caller,policy", "decided");
 
-// Read the source back: the same schemas, frozen aside (the trace keeps it).
+// Read the source back: the same schemas, frozen and slots aside (the trace keeps them).
 const read = Types.read(Python312.parse(Types.text(session)) as never);
 const contact = (read.store as any).stores[0].store.registered("Contact");
 check(contact.ref && [...contact.properties.keys()].join() === "name,home", "read");
@@ -110,8 +111,9 @@ check(proxy.items.map((entry: any) => entry.since).join() === "2020", "proxies")
 
 ## Practices
 
-1. **One step per decision.** `Dataclass` has one parameter, `frozen`; a policy (`T.Policy(T.Clause("Dataclass",
-   {"frozen": False}))`, `Types.PLAIN`) ranks the candidates, and `session.take(candidate)` is the caller deciding.
+1. **One step per decision.** A class's step has its decisions as parameters: `frozen`, and `slots` (fixed attributes,
+   no `__dict__`; an entry class has `slots` only); a policy (`T.Policy(T.Clause("Dataclass", {"frozen": False,
+   "slots": True}))`, `Types.PLAIN`) ranks the candidates, and `session.take(candidate)` is the caller deciding.
    `session.steps` is the trace, and `session.trace(...)` writes it as data.
 2. **What renders.** A named object schema without parameters, whose properties are basic natives, named
    object schemas, or lists of them (`list[T]`, `dict[K, V]` keyed by a basic native, nested to any depth),
