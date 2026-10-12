@@ -24,7 +24,7 @@ equivalent implementations exist: `python3/` and `typescript5/`; both generate P
   a *term* (mbse-expressions), and of a program tree a *syntax node* (mbse-programs); never a bare "node" in code,
   docs or messages. What a specification requires is a *constraint*, never a "rule"; a constraint is checked,
   resolved or generated from, never executed ([MBSE.md, What a specification is made
-  of](MBSE.md#what-a-specification-is-made-of)). Across this many languages, terms collide (an SVA
+  of](https://github.com/pitaman71/mbse-basis/blob/main/MBSE.md#what-a-specification-is-made-of)). Across this many languages, terms collide (an SVA
   `property`, a C++ template parameter, a SystemVerilog `constraint` block): wherever ours meets a language's own,
   in docs and examples, qualify the colliding term with whose it is. Here the seam is everywhere: a schema's
   *property* becomes a dataclass *field*, and Python's `@property` is Python's.
