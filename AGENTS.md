@@ -31,11 +31,11 @@ equivalent implementations exist: `python3/` and `typescript5/`; both generate P
 - **The README opens with why.** Its first sentence or paragraph says, TL;DR style, why this repository exists, in
   the terms of `MBSE.md`; what it is comes after. Keep that opening true as the repository changes.
 - **Every human-facing document has navigation.** A `{previous, home, next}` line heads and ends each document in
-  reading order; after adding, renaming or retitling one, run `python3 ../mbse-schemas/scripts/nav.py .`. Link text
-  is human-readable, never a path.
+  reading order; after adding, renaming or retitling one, run `python3 ../mbse-basis/scripts/update_doc_links.py`. Link
+  text is human-readable, never a path.
 - **Parallel work happens in workspaces.** Agents working at the same time each get a workspace from
-  `python3 scripts/siblings.py workspace <dir> --branch <name>` (with `--edit <sibling>` for a change that spans
-  repositories), install there, and `land` it when done.
+  `python3 ../mbse-basis/scripts/polyrepo.py workspace <dir> --branch <name>` (with `--edit <sibling>` for a change that
+  spans repositories), install there, and `land` it when done.
 - **The two implementations are equivalent.** Change both in the same commit, with the same names, the same error
   classes and byte-identical messages. Generated source must be byte-identical. A difference not listed in
   `docs/EQUIVALENCE.md` is a bug.
@@ -57,20 +57,20 @@ equivalent implementations exist: `python3/` and `typescript5/`; both generate P
 ## Commands
 
 ```sh
-python3 scripts/siblings.py clone            # the mbse siblings, beside this repository, pinned
-python3 scripts/siblings.py check            # the siblings are present and compatible with siblings.json
-cd python3 && uv sync --all-extras           # Python: use uv, never pip
+python3 ../mbse-basis/scripts/polyrepo.py clone # the mbse siblings, beside this repository, pinned
+python3 ../mbse-basis/scripts/polyrepo.py check # the siblings are present and compatible with siblings.json
+cd python3 && uv sync --all-extras              # Python: use uv, never pip
 uv run coverage run -m pytest && uv run coverage combine && uv run coverage report
 
-cd typescript5 && nvm use && npm install     # TypeScript: Node 22 or later
-npm run coverage                             # type-checks, runs every notebook, gates at 100%
+cd typescript5 && nvm use && npm install        # TypeScript: Node 22 or later
+npm run coverage                                # type-checks, runs every notebook, gates at 100%
 ```
 
 ## Related repositories
 
-Sibling checkouts beside this one, pinned by version and commit in `siblings.json` (see `scripts/siblings.py`):
-[mbse-schemas](https://github.com/pitaman71/mbse-schemas) (the schemas, reflected as a store's objects),
-[mbse-expressions](https://github.com/pitaman71/mbse-expressions) (the transforms' constraints),
+Sibling checkouts beside this one, pinned by version and commit in `siblings.json` (see mbse-basis'
+`scripts/polyrepo.py`): [mbse-schemas](https://github.com/pitaman71/mbse-schemas) (the schemas, reflected as a store's
+objects), [mbse-expressions](https://github.com/pitaman71/mbse-expressions) (the transforms' constraints),
 [mbse-patterns](https://github.com/pitaman71/mbse-patterns) (`Transforms`: sessions, steps, policies and traces) and
 [mbse-programs](https://github.com/pitaman71/mbse-programs) (Python's syntax trees, parsing and printing). The other
 target languages have their own repositories: mbse-codegen-ccpp, mbse-codegen-typescript and mbse-codegen-verilog.

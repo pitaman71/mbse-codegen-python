@@ -29,7 +29,7 @@ dev = [
 ]
 
 [tool.uv.sources]
-mbse-schemas = { path = "../../mbse-schemas/python3", editable = true }  # the sibling checkouts: scripts/siblings.py
+mbse-schemas = { path = "../../mbse-schemas/python3", editable = true }  # the sibling checkouts: ../mbse-basis/scripts/polyrepo.py
 mbse-expressions = { path = "../../mbse-expressions/python3", editable = true }
 mbse-patterns = { path = "../../mbse-patterns/python3", editable = true }
 mbse-programs = { path = "../../mbse-programs/python3", editable = true }
