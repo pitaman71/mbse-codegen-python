@@ -1,5 +1,5 @@
 <!-- nav -->
-[← mbse-codegen-python](README.md) · [Bridges for types →](docs/BRIDGES.md)
+[← mbse-codegen-python](README.md) · [Equivalence →](docs/EQUIVALENCE.md)
 
 # Why the mbse repositories exist
 
@@ -8,4 +8,4 @@ Moved to mbse-basis: [Why the mbse repositories exist](https://github.com/pitama
 ---
 
 <!-- nav -->
-[← mbse-codegen-python](README.md) · [Bridges for types →](docs/BRIDGES.md)
+[← mbse-codegen-python](README.md) · [Equivalence →](docs/EQUIVALENCE.md)

@@ -148,4 +148,4 @@ check(proxy.items.map((entry: any) => entry.since).join() === "2020", "proxies")
 5. **Round trips.** Schemas to source to schemas gives the same schemas; source to schemas to source gives the source as
    Python 3.12 prints it, given the same decisions. `frozen` is the one thing a schema does not hold.
 
-The design, and what is not rendered yet (parameters, named natives, extents): [CODEGEN.md](https://github.com/pitaman71/mbse-codegen-python/blob/main/docs/CODEGEN.md).
+The design, and what is not rendered yet (parameters, named natives, extents): [CAP-027: code generated from models](https://github.com/pitaman71/mbse-basis/blob/main/docs/capabilities/CAP-027.md), in mbse-basis.

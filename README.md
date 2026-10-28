@@ -14,7 +14,8 @@ It renders [mbse-schemas](https://github.com/pitaman71/mbse-schemas)' schemas as
 parameter such as whether a class is frozen), which a person or an agent takes, or a policy ranks. The steps are kept as
 data, a trace that replays the generation.
 
-Status: `Types`, schemas to dataclasses and back, is built (0.1); see [the design](docs/CODEGEN.md). Two equivalent
+Status: `Types`, schemas to dataclasses and back, is built (0.1); its design, decisions and open questions are mbse-basis
+[CAP-027: code generated from models](../mbse-basis/docs/capabilities/CAP-027.md)'s. Two equivalent
 implementations exist, `python3/` and `typescript5/`, and both generate the same Python. Start with
 [the skill](skills/mbse-codegen-python/SKILL.md).
 
