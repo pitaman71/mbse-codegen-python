@@ -49,12 +49,7 @@ equivalent implementations exist: `python3/` and `typescript5/`; both generate P
 - **The skill is packaged with each implementation.** After editing `skills/mbse-codegen-python/`, run
   `skills/sync.sh`.
 - **Behavior is decided in mbse-basis [CAP-027: Python3 source generated from schemas](../mbse-basis/docs/capabilities/CAP-027.md)**, and in [CAP-039: schemas round-trip through Python3](../mbse-basis/docs/capabilities/CAP-039.md) and
-  [FEA-021: every generation ambiguity a parameter](../mbse-basis/docs/features/FEA-021.md), each detail file's As built, Decided and Open questions sections. Record a decision the
-  user takes under Decided, one an agent takes under Decided by an agent, for review, and put what stays undecided
-  under Open questions, in a pull request to mbse-basis beside this repository's.
-  A decision the user specifies is recorded completely, every point and condition of it, as the rule; quoted where the
-  wording matters, never reduced to an example of what was built. Before writing or changing a design document, check
-  it against Decided, and cite the Decided entry rather than describe the decision again.
+  [FEA-021: every generation ambiguity a parameter](../mbse-basis/docs/features/FEA-021.md): their detail files, kept as mbse-basis' [`docs/README.md`](../mbse-basis/docs/README.md#detail-files) says (Detail files).
 
 ## Commands
 
