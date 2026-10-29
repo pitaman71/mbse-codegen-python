@@ -11,7 +11,7 @@ equivalent implementations exist: `python3/` and `typescript5/`; both generate P
 |---|---|
 | Know why the mbse repositories exist, and this one's part in them | [MBSE.md](MBSE.md) |
 | Use the library: generate Python from schemas, or read it back | [skills/mbse-codegen-python/SKILL.md](skills/mbse-codegen-python/SKILL.md), a skill |
-| Understand a design decision or an open question | [docs/CODEGEN.md](docs/CODEGEN.md), by section |
+| Understand a design decision or an open question | mbse-basis [CAP-027: Python3 source generated from schemas](../mbse-basis/docs/capabilities/CAP-027.md), by section (and [CAP-039: schemas round-trip through Python3](../mbse-basis/docs/capabilities/CAP-039.md), [FEA-021: every generation ambiguity a parameter](../mbse-basis/docs/features/FEA-021.md)) |
 | Change the package | this file, then [docs/EQUIVALENCE.md](docs/EQUIVALENCE.md) |
 | Find or add a test case | [python3/tests/TestPlan.md](python3/tests/TestPlan.md) (TypeScript's plan lists only its differences) |
 | Write the transforms' constraints | [mbse-patterns' AGENTS.md](https://github.com/pitaman71/mbse-patterns/blob/main/AGENTS.md), in the sibling checkout |
@@ -48,11 +48,8 @@ equivalent implementations exist: `python3/` and `typescript5/`; both generate P
   with an assertion in the shared case, in both suites.
 - **The skill is packaged with each implementation.** After editing `skills/mbse-codegen-python/`, run
   `skills/sync.sh`.
-- **Behavior is decided in `docs/CODEGEN.md`.** Record new decisions under Resolved, and put what stays undecided
-  under Open questions.
-  A decision the user specifies is recorded completely, every point and condition of it, as the rule; quoted where the
-  wording matters, never reduced to an example of what was built. Before writing or changing a design document, check
-  it against Resolved, and cite the Resolved entry rather than describe the decision again.
+- **Behavior is decided in mbse-basis [CAP-027: Python3 source generated from schemas](../mbse-basis/docs/capabilities/CAP-027.md)**, and in [CAP-039: schemas round-trip through Python3](../mbse-basis/docs/capabilities/CAP-039.md) and
+  [FEA-021: every generation ambiguity a parameter](../mbse-basis/docs/features/FEA-021.md): their detail files, kept as mbse-basis' [`docs/README.md`](../mbse-basis/docs/README.md#detail-files) says (Detail files).
 
 ## Commands
 

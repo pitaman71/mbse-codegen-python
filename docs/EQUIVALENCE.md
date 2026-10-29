@@ -1,5 +1,5 @@
 <!-- nav -->
-[← Code generation for Python](CODEGEN.md) · [Home](../README.md) · [Python package →](../python3/README.md)
+[← Why the mbse repositories exist](../MBSE.md) · [Home](../README.md) · [Python package →](../python3/README.md)
 
 # Equivalence
 
@@ -7,6 +7,8 @@ The Python (`mbse.Codegen.Python`) and TypeScript (`@mbse/codegen-python`) imple
 names, error classes and messages, the same test cases in the same order, and generate byte-identical Python source.
 They follow the conventions of mbse-schemas, mbse-patterns and mbse-programs; the differences below are deliberate,
 each forced by the language. Any other difference is a bug.
+This is the list mbse-basis [CAP-032: deliberate differences listed](../../mbse-basis/docs/capabilities/README.md#CAP-032) asks every
+repository to keep.
 
 | Concern | Python | TypeScript | Why | Cases |
 |---|---|---|---|---|
@@ -18,4 +20,4 @@ each forced by the language. Any other difference is a bug.
 ---
 
 <!-- nav -->
-[← Code generation for Python](CODEGEN.md) · [Home](../README.md) · [Python package →](../python3/README.md)
+[← Why the mbse repositories exist](../MBSE.md) · [Home](../README.md) · [Python package →](../python3/README.md)
