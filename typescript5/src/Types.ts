@@ -392,7 +392,7 @@ function annotated(held: (b: any) => any, found: Record<string, MetadataValue>):
 export const MAP = "Proxies.OfIndexed.Map";
 
 /** Whether a list keyed by `key` is a `Proxies.OfIndexed.Map`, not a `dict`: a key that is not a native, or a `float`,
- * whose NaNs and `-0.0` a `dict` compares otherwise (mbse-schemas' EQUALITY.md). */
+ * whose NaNs and `-0.0` a `dict` compares otherwise (mbse-basis [CAP-111: equality and ordering defined by the schema](../../../mbse-basis/docs/capabilities/CAP-111.md)). */
 function mapped(key: any): boolean {
   const structure = S.structure(key) as any;
   return !(structure instanceof S.OfNative.Data) || (structure.token as S.OfNative.Token).name === "float";
