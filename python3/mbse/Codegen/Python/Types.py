@@ -401,7 +401,7 @@ MAP = "Proxies.OfIndexed.Map"
 
 def _mapped(key: Any) -> bool:
     """Whether a list keyed by `key` is a `Proxies.OfIndexed.Map`, not a `dict`: a key that is not a native, or a
-    `float`, whose NaNs and `-0.0` a `dict` compares otherwise (mbse-schemas' EQUALITY.md)."""
+    `float`, whose NaNs and `-0.0` a `dict` compares otherwise (mbse-basis [CAP-111: equality and ordering defined by the schema](../../../../../mbse-basis/docs/capabilities/CAP-111.md))."""
     structure = S.structure(key)
     return not isinstance(structure, S.OfNative.Data) or structure.token.name == "float"
 
