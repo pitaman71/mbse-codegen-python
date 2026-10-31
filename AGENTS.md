@@ -19,37 +19,20 @@ equivalent implementations exist: `python3/` and `typescript5/`; both generate P
 
 ## Invariants when changing code
 
-- **One vocabulary across the mbse repositories.** A kind's or schema's named members are *properties*, never
-  "fields" (a field is only the host language's class member that holds one). An element of an expression tree is
-  a *term* (mbse-expressions), and of a program tree a *syntax node* (mbse-programs); never a bare "node" in code,
-  docs or messages. What a specification requires is a *constraint*, never a "rule"; a constraint is checked,
-  resolved or generated from, never executed ([MBSE.md, What a specification is made
-  of](https://github.com/pitaman71/mbse-basis/blob/main/MBSE.md#what-a-specification-is-made-of)). Across this many languages, terms collide (an SVA
-  `property`, a C++ template parameter, a SystemVerilog `constraint` block): wherever ours meets a language's own,
-  in docs and examples, qualify the colliding term with whose it is. Here the seam is everywhere: a schema's
-  *property* becomes a dataclass *field*, and Python's `@property` is Python's.
-- **The README opens with why.** Its first sentence or paragraph says, TL;DR style, why this repository exists, in
-  the terms of `MBSE.md`; what it is comes after. Keep that opening true as the repository changes.
-- **Every human-facing document has navigation.** A `{previous, home, next}` line heads and ends each document in
-  reading order; after adding, renaming or retitling one, run `python3 ../mbse-basis/scripts/update_doc_links.py`. Link
-  text is human-readable, never a path.
-- **Parallel work happens in workspaces.** Agents working at the same time each get a workspace from
-  `python3 ../mbse-basis/scripts/polyrepo.py workspace <dir> --branch <name>` (with `--edit <sibling>` for a change that
-  spans repositories), install there, and `land` it when done.
-- **The two implementations are equivalent.** Change both in the same commit, with the same names, the same error
-  classes and byte-identical messages. Generated source must be byte-identical. A difference not listed in
-  `docs/EQUIVALENCE.md` is a bug.
-- **Generation is invertible.** Every transform that writes Python has an inverse that reads it back; the tests check
-  both round trips (schemas to source to schemas, and source to schemas to source).
-- **Tests are Jupyter notebooks**, one suite per notebook, with the same case IDs in the same order in both
-  languages. Each case is a markdown cell `## ID · title` followed by one code cell. Notebooks are JSON written with
-  `indent=1`, `sort_keys=True` and `ensure_ascii=False`.
-- **Coverage is 100%** in both languages (statements and branches; in TypeScript also functions and lines). Close a gap
-  with an assertion in the shared case, in both suites.
-- **The skill is packaged with each implementation.** After editing `skills/mbse-codegen-python/`, run
-  `skills/sync.sh`.
-- **Behavior is decided in mbse-basis [CAP-027: Python3 source generated from schemas](../mbse-basis/docs/capabilities/CAP-027.md)**, and in [CAP-039: schemas round-trip through Python3](../mbse-basis/docs/capabilities/CAP-039.md) and
-  [FEA-021: every generation ambiguity a parameter](../mbse-basis/docs/features/FEA-021.md): their detail files, kept as mbse-basis' [`docs/README.md`](../mbse-basis/docs/README.md#detail-files) says (Detail files).
+The conventions every mbse repository shares are stated once in mbse-basis; this file cites them and keeps
+only what differs here.
+
+- **Vocabulary**: [VOC-007: property](../mbse-basis/docs/VOCABULARY.md#VOC-007), [VOC-026: schema](../mbse-basis/docs/VOCABULARY.md#VOC-026), [VOC-008: term](../mbse-basis/docs/VOCABULARY.md#VOC-008), [VOC-009: syntax node](../mbse-basis/docs/VOCABULARY.md#VOC-009) and [VOC-002: constraint](../mbse-basis/docs/VOCABULARY.md#VOC-002), each qualified with whose it is where it meets a language's own term ([the vocabulary](../mbse-basis/docs/VOCABULARY.md), its introduction). Here the seam is everywhere: a schema's *property* becomes a dataclass *field*, and Python's
+  `@property` is Python's.
+- **Documents**: navigation lines, the README opening with why, and what this file holds ([Rules for every document](../mbse-basis/docs/README.md#rules-for-every-document)).
+- **Equivalence**: [PRI-028: both implementations change together](../mbse-basis/docs/PRINCIPLES.md#PRI-028), [PRI-037: the same conformance corpora](../mbse-basis/docs/PRINCIPLES.md#PRI-037), [PRI-038: the same cases in both languages](../mbse-basis/docs/PRINCIPLES.md#PRI-038), [PRI-039: 100% coverage of both](../mbse-basis/docs/PRINCIPLES.md#PRI-039) and [PRI-040: deliberate differences listed](../mbse-basis/docs/PRINCIPLES.md#PRI-040), the differences listed in `docs/EQUIVALENCE.md`. Here the output is generated source, which must be byte-identical in both.
+- **Tests**: [PRI-035: tests are notebooks: one suite each, the same case IDs in the same order in both languages](../mbse-basis/docs/PRINCIPLES.md#PRI-035).
+- **The skill**: after editing `skills/mbse-codegen-python/`, run `skills/sync.sh`; SKL-01 fails until the packaged copies match (the copy [PRI-016: guidance written once](../mbse-basis/docs/PRINCIPLES.md#PRI-016) plans to remove), and SKL-02 runs every complete program ([PRI-036: every program in a skill is complete and run; fragments are tagged as fragments](../mbse-basis/docs/PRINCIPLES.md#PRI-036)).
+- **Work**: [PRI-029: parallel work in polyrepo workspaces](../mbse-basis/docs/PRINCIPLES.md#PRI-029), [PRI-031: the version is the contract](../mbse-basis/docs/PRINCIPLES.md#PRI-031), [PRI-032: a sibling's gap is reported, not worked around](../mbse-basis/docs/PRINCIPLES.md#PRI-032) and [PRI-033: work lands by branch and pull request](../mbse-basis/docs/PRINCIPLES.md#PRI-033).
+- **Behavior is decided in mbse-basis items**: [CAP-027: Python3 source generated from schemas](../mbse-basis/docs/capabilities/CAP-027.md), [CAP-039: schemas round-trip through Python3](../mbse-basis/docs/capabilities/CAP-039.md) and [FEA-021: every generation ambiguity a parameter](../mbse-basis/docs/features/FEA-021.md), recorded as the basis says ([Detail files](../mbse-basis/docs/README.md#detail-files)).
+- **Generation is invertible** ([CAP-080: invertible transforms](../mbse-basis/docs/capabilities/CAP-080.md), [CAP-039: schemas round-trip through Python3](../mbse-basis/docs/capabilities/CAP-039.md)): every transform that writes Python has an inverse that reads it back,
+  and the tests check both round trips (schemas to source to schemas, and source to schemas to source).
+- Never write to `~/.claude/projects/*/memory/` or any hidden memory: what is worth keeping goes in the repository.
 
 ## Commands
 
