@@ -5,10 +5,11 @@ description: Generate Python dataclasses from mbse-schemas schemas, and read dat
 
 # mbse-codegen-python
 
-Code generated from a specification keeps the two from drifting. `Types` renders the object schemas a store registers
-(and those they refer to) as Python dataclasses, and reads a module's dataclasses back as schemas. Each is a session of
-[mbse-patterns](https://github.com/pitaman71/mbse-patterns)' transforms, one step per decision, over one store: the
-schemas, Python's syntax trees ([mbse-programs](https://github.com/pitaman71/mbse-programs)) and the output module.
+Code generated from a specification keeps the two from drifting ([FEA-022: code generation](../../../mbse-basis/docs/features/README.md#FEA-022)).
+`Types` renders the object schemas a store registers (and those they refer to) as Python dataclasses, and reads a
+module's dataclasses back as schemas. Each is a session of [mbse-patterns](https://github.com/pitaman71/mbse-patterns)'
+transforms, one step per decision, over one store: the schemas, Python's syntax trees
+([mbse-programs](https://github.com/pitaman71/mbse-programs)) and the output module.
 
 ```python
 from mbse.Codegen.Python import Types
@@ -40,7 +41,8 @@ read = Types.read(Python312.parse(Types.text(session)))
 contact = read.store.stores[0].store.registered("Contact")
 assert contact.ref and list(contact.properties) == ["name", "home"]
 
-# A relation is the class of its entries, and an adjacency a field holding them: code reads proxies and classes alike.
+# A relation is the class of its entries, and an adjacency a dataclass field holding them:
+# code reads proxies and classes alike.
 Owns = S.OfRelation.Builder().name("Owns").links("owner", "item").properties(lambda p: p.name("since").of(
     lambda t: t.as_native(int))).create()
 Owner = S.OfObject.Builder().name("Owner").ref().relations(lambda r: r.name("items").of(Owns).me("owner")).create()
@@ -96,7 +98,7 @@ const read = Types.read(Python312.parse(Types.text(session)) as never);
 const contact = (read.store as any).stores[0].store.registered("Contact");
 check(contact.ref && [...contact.properties.keys()].join() === "name,home", "read");
 
-// A relation is the class of its entries, and an adjacency a field holding them, read as proxies read theirs.
+// A relation is the class of its entries, and an adjacency a dataclass field holding them, read as proxies read theirs.
 const Owns = new S.OfRelation.Builder().name("Owns").links("owner", "item").properties((p) => p.name("since").of(
   (t) => t.as_native(BigInt))).create();
 const Owner = new S.OfObject.Builder().name("Owner").ref().relations((r) => r.name("items").of(Owns).me("owner")).create();
@@ -114,38 +116,34 @@ check(proxy.items.map((entry: any) => entry.since).join() === "2020", "proxies")
 1. **One step per decision.** A class's step has its decisions as parameters: `frozen`, and `slots` (fixed attributes,
    no `__dict__`; an entry class has `slots` only); a policy (`T.Policy(T.Clause("Dataclass", {"frozen": False,
    "slots": True}))`, `Types.PLAIN`) ranks the candidates, and `session.take(candidate)` is the caller deciding.
-   `session.steps` is the trace, and `session.trace(...)` writes it as data.
-2. **What renders.** A named object schema without parameters, whose properties are basic natives, named
-   object schemas, or lists of them (`list[T]`, `dict[K, V]` keyed by a basic native, nested to any depth),
-   without extents. Names are written as the schemas have them (a keyword property becomes `from_`): one Python cannot
-   spell is in `Types.problems(session)`, and `Types.text(session)` raises `ValueError` while any remain. A reference
-   object schema is `@dataclass(eq=False)`; a description is the class's docstring, and a singleton's name `SINGLETON`.
-   Every field is optional: `name: T | None = None`, its description in its metadata (`field(default=None,
-   metadata={"description": ...})`). Nothing is lost silently: what Python's types cannot hold (a native's width) has
-   no class, and `Types.missing(session)` says so. Classes are in name order. A relation is the class of its entries (`Entry`): a field per link, typed by the classes that declare it, then
-   its properties, with class variables `LINKS` and `UNIQUES`; each adjacency, on both ends, is one field named after it
-   holding its entries (`phones: tuple[Phones, ...] = ()`), so code reads proxies and generated classes alike
-   (`for entry in contact.phones: entry.phone.number`). A named union or intersection is a value class of a dataclass
-   field per branch or part (`KIND` says which), read as proxies read union values (`card.reach.email`). Configured
-   `flat` in the schema, a union is a type alias of its branches' types (`type Channel = Call | Mail`, `Alias`), and an
-   intersection a class of its parts' properties (`PARTS` says whose), as flat proxies read them. A named native or
-   list is a type alias of what it holds (`type Word = str`, `type Names = list[Word]`, `NativeAlias`, `ListAlias`),
-   which a field names; `AliasSchema` reads any alias back. What an annotation cannot say is `Annotated` metadata: a
-   width (`Annotated[int, {"bits": 32}]`), an extent (`{"minimum": 1, "maximum": 3}`), a native's own description, a
-   `python3` token (`{"native": ["python3", "int"]}`). A list keyed by a `float`, a list or a value object is
-   mbse-schemas' `Proxies.OfIndexed.Map[K, V]`, which compares keys as schema equality does; others are `dict[K, V]`.
-   A dotted name (`Codegen.Output`) is a class nested in its prefix's class, its `__qualname__` the schema's name.
-   A type with no Python form is dropped by a step (`DropInline`, `DropFormat`, `DropUndeclared`): `Any` where it is
-   held; `Types.dropped(session)` reports each with its reason and place. Parameters and terms are not dropped: a
-   schema with them has no class until the parametric bridge (TypeVars), and `Types.missing` reports it.
-   `Types.missing(session)` lists the schemas left without a class or alias.
+   `session.steps` is the trace, and `session.trace(...)` writes it as data. Why each ambiguity is a parameter:
+   [FEA-021: every generation ambiguity a parameter](../../../mbse-basis/docs/features/FEA-021.md).
+2. **What renders.** Each named schema a step can take becomes a class or a type alias: an object schema a
+   `@dataclass` (`eq=False` for a reference schema), a relation the class of its entries, with each adjacency a
+   dataclass field holding them (`phones: tuple[Phones, ...] = ()`), a union or an intersection a value class (or,
+   `flat`, a type alias), and a named native or list a type alias (`type Word = str`). Every dataclass field is
+   optional (`name: T | None = None`), and what an annotation cannot say (a width, an extent, a description) is
+   `Annotated` metadata. Three calls report what did not render: `Types.problems(session)`, names Python cannot spell
+   (`Types.text(session)` raises `ValueError` while any remain); `Types.dropped(session)`, each schema a step dropped
+   to `Any`, with its reason and place; and `Types.missing(session)`, the schemas left without a class or alias. Each
+   construct's bridge and why: [CAP-027: Python3 source generated from schemas](../../../mbse-basis/docs/capabilities/CAP-027.md#bridges)
+   and its [Decided](../../../mbse-basis/docs/capabilities/CAP-027.md#decided) section; nothing is lost silently, after
+   [PRI-002: preserve, don't lose](../../../mbse-basis/docs/PRINCIPLES.md#PRI-002); code reads generated classes as it reads proxies, after
+   [PRI-010: proxies and generated code read alike](../../../mbse-basis/docs/PRINCIPLES.md#PRI-010).
 3. **What reads back.** A `@dataclass` class (`@dataclass(...)` too) whose annotations are written as `Dataclass`
-   writes them, `| None` or not; anything else raises `ValueError` naming the field. Reading registers the schemas in
-   the store given, and fills a schema a field names when its class is read.
+   writes them, `| None` or not; anything else raises `ValueError` naming the dataclass field. Reading registers the
+   schemas in the store given, and fills a schema a dataclass field names when its class is read:
+   [CAP-039: schemas round-trip through Python3](../../../mbse-basis/docs/capabilities/CAP-039.md). mbse-schemas' own adapter reads live
+   classes instead: [CAP-162: Python dataclasses translated to and from schemas](../../../mbse-basis/docs/capabilities/CAP-162.md).
 4. **Regenerating.** `Types.generate(schemas, policy, earlier=session.steps)` takes each earlier decision again where
    its key (`Dataclass(s=Contact)`) still occurs: after the schemas change, only new schemas ask. `session.orphans` are
-   decisions about schemas now gone; `Transforms.diff(earlier, later)` compares two generations.
+   decisions about schemas now gone; `Transforms.diff(earlier, later)` compares two generations:
+   [CAP-076: reruns reuse decisions](../../../mbse-basis/docs/capabilities/CAP-076.md).
 5. **Round trips.** Schemas to source to schemas gives the same schemas; source to schemas to source gives the source as
-   Python 3.12 prints it, given the same decisions. `frozen` is the one thing a schema does not hold.
+   Python 3.12 prints it, given the same decisions. `frozen` and `slots` are what a schema does not hold: the trace
+   keeps them. [CAP-039: schemas round-trip through Python3](../../../mbse-basis/docs/capabilities/CAP-039.md).
 
-The design, and what is not rendered yet (parameters, named natives, extents): [CAP-027: code generated from models](https://github.com/pitaman71/mbse-basis/blob/main/docs/capabilities/CAP-027.md), in mbse-basis.
+A schema with parameters or terms has no class, and `Types.missing` reports it. The parametric bridge is
+[CAP-047: parametric schemas as Python3 generics](../../../mbse-basis/docs/capabilities/README.md#CAP-047),
+[CAP-048: terms in generated Python3](../../../mbse-basis/docs/capabilities/README.md#CAP-048) and
+[CAP-049: type parameters in Python3](../../../mbse-basis/docs/capabilities/README.md#CAP-049).
