@@ -11,7 +11,7 @@ equivalent implementations exist: `python3/` and `typescript5/`; both generate P
 |---|---|
 | Know why the mbse repositories exist, and this one's part in them | [MBSE.md](MBSE.md) |
 | Use the library: generate Python from schemas, or read it back | [skills/mbse-codegen-python/SKILL.md](skills/mbse-codegen-python/SKILL.md), a skill |
-| Understand a design decision or an open question | mbse-basis [CAP-027: Python3 source generated from schemas](../mbse-basis/docs/capabilities/CAP-027.md), by section (and [CAP-039: schemas round-trip through Python3](../mbse-basis/docs/capabilities/CAP-039.md), [FEA-021: every generation ambiguity a parameter](../mbse-basis/docs/features/FEA-021.md)) |
+| Understand a design decision or an open question | mbse-basis [CAP-027: Python3 source generated from schemas](https://github.com/pitaman71/mbse-basis/blob/main/docs/capabilities/CAP-027.md), by section (and [CAP-039: schemas round-trip through Python3](https://github.com/pitaman71/mbse-basis/blob/main/docs/capabilities/CAP-039.md), [FEA-021: every generation ambiguity a parameter](https://github.com/pitaman71/mbse-basis/blob/main/docs/features/FEA-021.md)) |
 | Change the package | this file, then [docs/EQUIVALENCE.md](docs/EQUIVALENCE.md) |
 | Find or add a test case | [python3/tests/TestPlan.md](python3/tests/TestPlan.md) (TypeScript's plan lists only its differences) |
 | Write the transforms' constraints | [mbse-patterns' AGENTS.md](https://github.com/pitaman71/mbse-patterns/blob/main/AGENTS.md), in the sibling checkout |
@@ -21,15 +21,22 @@ equivalent implementations exist: `python3/` and `typescript5/`; both generate P
 
 Agents must read these mbse-basis documents before doing any work:
 
-- [The mbse basis](../mbse-basis/docs/README.md)
-- [Principles](../mbse-basis/docs/PRINCIPLES.md)
-- [Features](../mbse-basis/docs/features/README.md)
-- [Capabilities](../mbse-basis/docs/capabilities/README.md)
+- [The mbse basis](https://github.com/pitaman71/mbse-basis/blob/main/docs/README.md)
+- [Principles](https://github.com/pitaman71/mbse-basis/blob/main/docs/PRINCIPLES.md)
+- [Features](https://github.com/pitaman71/mbse-basis/blob/main/docs/features/README.md)
+- [Capabilities](https://github.com/pitaman71/mbse-basis/blob/main/docs/capabilities/README.md)
 
-These may be read selectively, on demand: [Vocabulary](../mbse-basis/docs/VOCABULARY.md) and
-[Qualities](../mbse-basis/docs/QUALITIES.md).
+These may be read selectively, on demand: [Vocabulary](https://github.com/pitaman71/mbse-basis/blob/main/docs/VOCABULARY.md) and
+[Qualities](https://github.com/pitaman71/mbse-basis/blob/main/docs/QUALITIES.md).
 
 Never write to `~/.claude/projects/*/memory/` or any hidden memory: what is worth keeping goes in the repository.
+
+Resolve a link written `mbse:<repo>/<path>`, as skills and source comments write a link into another mbse
+repository, to the first of these that exists: in a polyrepo checkout, `<repo root>/../<repo>/<path>`, where `<repo
+root>` is this repository's root; for a link into the installed package's own repository, `<path>` without its
+language directory (`python3/` or `typescript5/`), under the installed package's root (Python: the `site-packages`
+directory that holds `mbse/`; npm: the package's directory), where the package ships that file; otherwise
+`https://github.com/pitaman71/<repo>/blob/main/<path>`.
 
 ## Commands
 
