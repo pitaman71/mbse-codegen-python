@@ -158,7 +158,7 @@ function over(symbols: Record<string, S.OfObject.Data>, constraint: unknown) {
 
 // --- Drops: what has no Python form, and why ---
 
-/** Why a type has no Python form, by the transform that drops it ([CAP-027: Python3 source generated from schemas](../../../mbse-basis/docs/capabilities/CAP-027.md#decided), Decided; each an open question). A type
+/** Why a type has no Python form, by the transform that drops it ([CAP-027: Python3 source generated from schemas](mbse:mbse-basis/docs/capabilities/CAP-027.md#decided), Decided; each an open question). A type
  * dropped where it is held is `Any` there, and the schema holding it keeps its class; a named native of another format
  * has no alias, and every reference to it is `Any`. */
 export const DROPS: Record<string, string> = {
@@ -304,7 +304,7 @@ function dropTransforms(): T.Transform[] {
 /** Whether a type `t` has parameters or terms, whose Python form (TypeVars) is not built yet, there or within an inline
  * list it is: an application, a native or a list declaring parameters, a width or an extent that is a term, or a
  * reference to a named schema that declares parameters, has such a width or extent, or is an application. A schema
- * holding one has no class or alias yet, and `missing` reports it: it is not dropped ([CAP-027: Python3 source generated from schemas](../../../mbse-basis/docs/capabilities/CAP-027.md#decided), Decided). */
+ * holding one has no class or alias yet, and `missing` reports it: it is not dropped ([CAP-027: Python3 source generated from schemas](mbse:mbse-basis/docs/capabilities/CAP-027.md#decided), Decided). */
 export const Unbuilt = new P.OfPredicate.Builder().name("Codegen.Unbuilt").parameters((q) => q.name("t")).create();
 
 function namedUnbuilt(type: E.Writer): unknown {
@@ -392,7 +392,7 @@ function annotated(held: (b: any) => any, found: Record<string, MetadataValue>):
 export const MAP = "Proxies.OfIndexed.Map";
 
 /** Whether a list keyed by `key` is a `Proxies.OfIndexed.Map`, not a `dict`: a key that is not a native, or a `float`,
- * whose NaNs and `-0.0` a `dict` compares otherwise (mbse-basis [CAP-111: equality and ordering defined by the schema](../../../mbse-basis/docs/capabilities/CAP-111.md)). */
+ * whose NaNs and `-0.0` a `dict` compares otherwise (mbse-basis [CAP-111: equality and ordering defined by the schema](mbse:mbse-basis/docs/capabilities/CAP-111.md)). */
 function mapped(key: any): boolean {
   const structure = S.structure(key) as any;
   return !(structure instanceof S.OfNative.Data) || (structure.token as S.OfNative.Token).name === "float";
