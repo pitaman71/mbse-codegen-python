@@ -9,11 +9,11 @@ equivalent implementations exist: `python3/` and `typescript5/`; both generate P
 
 | You want to | Read |
 |---|---|
-| Know why the mbse repositories exist, and this one's part in them | [MBSE.md](MBSE.md) |
-| Use the library: generate Python from schemas, or read it back | [skills/mbse-codegen-python/SKILL.md](skills/mbse-codegen-python/SKILL.md), a skill |
+| Know why the mbse repositories exist, and this one's part in them | [Why the mbse repositories exist](MBSE.md) |
+| Use the library: generate Python from schemas, or read it back | [mbse-codegen-python](skills/mbse-codegen-python/SKILL.md), a skill |
 | Understand a design decision or an open question | mbse-basis [CAP-027: Python3 source generated from schemas](https://github.com/pitaman71/mbse-basis/blob/main/docs/capabilities/CAP-027.md), by section (and [CAP-039: schemas round-trip through Python3](https://github.com/pitaman71/mbse-basis/blob/main/docs/capabilities/CAP-039.md), [FEA-021: every generation ambiguity a parameter](https://github.com/pitaman71/mbse-basis/blob/main/docs/features/FEA-021.md)) |
-| Change the package | this file, then [docs/EQUIVALENCE.md](docs/EQUIVALENCE.md) |
-| Find or add a test case | [python3/tests/TestPlan.md](python3/tests/TestPlan.md) (TypeScript's plan lists only its differences) |
+| Change the package | this file, then [Equivalence](docs/EQUIVALENCE.md) |
+| Find or add a test case | [Test plan](python3/tests/TestPlan.md) (TypeScript's plan lists only its differences) |
 | Write the transforms' constraints | [mbse-patterns' AGENTS.md](https://github.com/pitaman71/mbse-patterns/blob/main/AGENTS.md), in the sibling checkout |
 | Build or print syntax trees | [mbse-programs' AGENTS.md](https://github.com/pitaman71/mbse-programs/blob/main/AGENTS.md), in the sibling checkout |
 
