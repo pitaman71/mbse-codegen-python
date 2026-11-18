@@ -10,8 +10,8 @@ Python 3 module's tree as one value) and mbse-schemas 0.30. Its design and decis
 [CAP-027: Python3 source generated from schemas](https://github.com/pitaman71/mbse-basis/blob/main/docs/capabilities/CAP-027.md)'s,
 and [CAP-039: schemas round-trip through Python3](https://github.com/pitaman71/mbse-basis/blob/main/docs/capabilities/CAP-039.md)
 states the round trips it keeps. The [first-release proposal](https://github.com/pitaman71/mbse-transforms/blob/main/docs/proposals/first-release/README.md#what-mbse-codegen-python-then-needs-of-it)
-of mbse-transforms says what this repository then needs of it. No code is written until the user decides the questions below, and the
-port cannot install until mbse-programs and mbse-expressions move to mbse-schemas 0.30 (Gaps found, 1).
+of mbse-transforms says what this repository then needs of it. No code is written until the user has reviewed it, and
+the port cannot install until mbse-programs and mbse-expressions move to mbse-schemas 0.30 (Gaps found, 1).
 
 ## Where it stands
 
@@ -56,23 +56,23 @@ whose singleton `Codegen.Output` holds the module.
 
 | `Types` 0.16 | Replaced by |
 |---|---|
-| `store(schemas, module)`, a `Stores.Combined` of three stores | The caller's stores, one for each argument: the schemas' store for the `source`, mbse-programs' store holding the module's file for the `sync` (question 1), and a certificates' store. mbse-schemas no longer combines stores |
-| `Output`, `Generated`, `Defined`, `OUTPUT` | The module's `Programs.Python3.Module`, owned by `Programs.Framework.TheWorkspace` under its `path`, is the output; what it defines, by qualified name, is read from its value whenever it is needed (question 10) |
-| `Dropped`, `DROPS`, `DROP`, `dropped(session)` | A drop transform per reason with a distinct name (question 4); the drops reported from their certificates (question 5) |
+| `store(schemas, module)`, a `Stores.Combined` of three stores | The caller's stores: the schemas' store behind the `source`, the store of the caller's choosing behind the `sync` or the `target` (Decided, 1), and a certificates' store. mbse-schemas no longer combines stores |
+| `Output`, `Generated`, `Defined`, `OUTPUT` | Retired (Decided, 10): where what the transforms write goes is the caller's. What a module defines, by qualified name, is read from its value whenever it is needed |
+| `Dropped`, `DROPS`, `DROP`, `dropped(session)` | A drop transform per reason with a distinct name (Decided, 4); the drops reported from their certificates (Decided, 5) |
 | `Dataclass`, `Entry`, `Union`, `Intersection`, `Alias`, `ListAlias` | mbse-transforms transforms, each defined by `Transforms.define` with a prototype pattern and a registered procedure (The proposal, below) |
-| `NativeAlias` | Nothing to match in mbse-schemas 0.30, which has no named scalar (question 7) |
-| `Schema`, `AliasSchema` | One transform per file, as [CAP-317: transforms targeting value objects](https://github.com/pitaman71/mbse-basis/blob/main/docs/capabilities/README.md#CAP-317) leaves it (question 6) |
-| `Unbuilt`, and each `before`'s constraints (mbse-expressions writers, mbse-patterns' `Exists` and `Contains`) | Each prototype pattern's spec where the condition is structural; the rest as question 2 decides |
+| `NativeAlias` | Nothing to match in mbse-schemas 0.30, which has no named scalar (Decided, 7) |
+| `Schema`, `AliasSchema` | One transform per file, as [CAP-317: transforms targeting value objects](https://github.com/pitaman71/mbse-basis/blob/main/docs/capabilities/README.md#CAP-317) leaves it (Decided, 6) |
+| `Unbuilt`, and each `before`'s constraints (mbse-expressions writers, mbse-patterns' `Exists` and `Contains`) | Each prototype pattern's spec where the condition is structural; the rest the caller's verification (Decided, 2) |
 | Each `after` | The caller's verification between `apply` and `certify` |
 | `TO_PYTHON`, `FROM_PYTHON` | The transforms in the catalog, `Transforms.TheCatalog`, read by name |
 | `PLAIN`, a mbse-patterns `Policy` that takes candidates | A `Transforms.Policy` that ranks them; `generate` takes the first of each frame's |
 | `generate(schemas, policy, earlier)`, `read(module, schemas)` | The same entry points, written as the caller of mbse-transforms: frames, a session, `apply`, verification, `certify` |
-| `session.orphans`, mbse-patterns' `Transforms.diff`, `earlier` steps | Queries over the certificates, as mbse-transforms' reruns and diffs are |
+| `session.orphans`, mbse-patterns' `Transforms.diff`, `earlier` applications | Queries over the certificates, as mbse-transforms' reruns and diffs are |
 | `missing(session)` | Kept: the schemas no class or Python type alias renders, read from the schemas' store and the module's value. [CAP-082: completeness reported](https://github.com/pitaman71/mbse-basis/blob/main/docs/capabilities/CAP-082.md) is mbse-transforms', not met |
 | `problems(session)` | mbse-programs' `Check.validate(store, path)`, plus `Types`' own check of a nested class under a dataclass field's name |
 | `text(session)` | mbse-programs' `Print.print_module(store, path)`, refused while `problems` lists any |
 | `KEYWORDS`, `NATIVES` | Kept: a property named by a keyword is a field with a trailing underscore; the five basic scalars are Python's `bool`, `int`, `float`, `str` and `bytes` |
-| `MAP`, `Proxies.OfIndexed.Map` in generated code | No counterpart in mbse-schemas 0.30.1 (Gaps found, 4; question 8) |
+| `MAP`, `Proxies.OfIndexed.Map` in generated code | No counterpart in mbse-schemas 0.30.1 (Gaps found, 4; Decided, 8) |
 
 ## Decided elsewhere, that applies
 
@@ -120,9 +120,9 @@ sampling, generators and characterizers, none of which `Types` uses, nor mbse-tr
 is not in it). Its 0.9.1 does not import against mbse-schemas 0.30.1 (measured above). The port removes it from
 `siblings.json`, `pyproject.toml` and `package.json`.
 
-**mbse-expressions stays a sibling**, through mbse-programs and directly: a statement's expressions, its annotations
-among them, are mbse-expressions' `Python3` and `Python Types` terms, which `Types` writes through mbse-schemas'
-builders and reads through mbse-expressions' `Terms`, as mbse-programs' printer does *(agent, for review)*.
+**mbse-expressions stays a sibling** (Decided, 13): a statement's expressions, its annotations among them, are
+mbse-expressions' `Python3` and `Python Types` terms, which `Types` writes through mbse-schemas' builders and reads
+through mbse-expressions' `Terms`, as mbse-programs' printer does.
 
 ## The proposal
 
@@ -134,22 +134,22 @@ naming the procedure registered under it in a `Transforms.Procedures` that `Type
 transform's parameters through mbse-schemas' Parametrics; `frozen` and `slots` are `Schemas.OfBool` parameters, whose
 finite domain makes one candidate per combination of their values, four per class, as today. A procedure,
 `procedure(source, sync, target, assignments)`, reads the `source`'s symbols' visitors, writes the `sync`'s or the
-`target`'s through their stores' builders, and takes every choice from `assignments`.
+`target`'s, whichever the caller gives, through their stores' builders, and takes every choice from `assignments`.
 
 To Python, a schema is a reference object of the schemas' store, so a prototype's symbol binds the schema itself, finer
-than a file. The module is a file, so the frame that carries it binds the file: CAP-317's file granularity is on the
-module's side alone.
+than a file. A module is a file, so the `sync` or `target` the caller gives binds a file: CAP-317's file granularity is
+on the module's side alone.
 
 | Transform | Prototype: symbols, and what it states | Procedure | Parameters | Arguments |
 |---|---|---|---|---|
-| `Dataclass` | `s`, a `Schemas.OfObject`: named, declaring no parameters, holding nothing unbuilt, and no adjacency to a relation declaring parameters | Writes `s`'s class, a `Programs.Python3.ClassDef` value, into the module's `body` in name order, nested in the class of its dotted name's prefix, with the imports it needs | `frozen`, `slots` | `source`: `s`'s frame; the module's file's frame (question 1) |
+| `Dataclass` | `s`, a `Schemas.OfObject`: named, declaring no parameters, holding nothing unbuilt, and no adjacency to a relation declaring parameters | Writes `s`'s class, a `Programs.Python3.ClassDef` value, into the `body` of the module its `sync` or `target` binds, in name order, nested in the class of its dotted name's prefix, with the imports it needs | `frozen`, `slots` | `source`: `s`'s frame; a `sync` or a `target`, as the caller gives (Decided, 1) |
 | `Entry` | `r`, a `Schemas.OfRelation`: named, declaring no parameters, holding nothing unbuilt, no link declared by an object schema declaring parameters | Writes `r`'s entry class: a field per link, then per property, `LINKS` and `UNIQUES` | `slots` | as `Dataclass` |
 | `Union` | `s`, a `Schemas.OfUnion`: named, not `flat`, with branches, declaring no parameters, holding nothing unbuilt | Writes a value class of a field per branch, `KIND = "union"` | `frozen`, `slots` | as `Dataclass` |
 | `Intersection` | `s`, a `Schemas.OfIntersection`: as `Union`, with parts, `flat` or not | Writes a value class of a field per part, or of its parts' properties where `flat` (`PARTS`, `DESCRIPTIONS`) | `frozen`, `slots` | as `Dataclass` |
-| `Alias` | `s`, a `Schemas.OfUnion`: named, `flat`, with branches, declaring no parameters, holding nothing unbuilt | Writes a Python `type` statement of its branches, `Annotated` where branch names or descriptions need it | none | as `Dataclass` |
-| `ListAlias` | `s`, a `Schemas.OfContainer`: named, its element and index holding nothing unbuilt | Writes a Python `type` statement of `list[...]` or `dict[...]` (questions 7 and 8) | none | as `Dataclass` |
-| `DropInline`, `DropUndeclared` (and `DropFormat`, question 7) | A schema holding a schema dropped for the reason (question 4) | Writes nothing: the certificate records the drop (question 5) | none | `source` alone |
-| `Schema`, with `AliasSchema` merged into it (question 6) | `m`, a `Programs.Python3.Module` | Reads every dataclass and Python type alias in `m`'s value, in order, and writes the schemas each describes | none | `source`: `m`'s frame; `target`: the frame of the module of schemas written into (question 6) |
+| `Alias` | `s`, a `Schemas.OfUnion`: named, `flat`, with branches, declaring no parameters, holding nothing unbuilt | Writes a Python type alias of its branches, as an annotated assignment, `Name: TypeAlias = ...` (Decided, 12), `Annotated` where branch names or descriptions need it | none | as `Dataclass` |
+| `ListAlias` | `s`, a `Schemas.OfContainer`: named, its element and index holding nothing unbuilt | Writes a Python type alias of `list[...]` or `dict[...]`, as `Alias` does (Decided, 7, 8 and 12) | none | as `Dataclass` |
+| `DropInlineObject`, `DropInlineRelation`, `DropInlineUnion`, `DropInlineIntersection`, `DropInlineContainer`, `DropUndeclared` (Decided, 4 and 7) | A schema of its kind holding a schema dropped for the reason | Writes nothing: the certificate records the drop (Decided, 5) | none | `source` alone |
+| `Schema`, with `AliasSchema` merged into it (Decided, 6) | `m`, a `Programs.Python3.Module` | Reads every dataclass and Python type alias in `m`'s value, in order, and writes the schemas each describes | none | `source`: `m`'s frame; a `sync` or a `target`, as the caller gives |
 
 Each procedure decides nothing below its parameters. What it computes from the schema it reads, such as `Any` where a
 dropped schema is held, `dict` or another form for a keyed container, the nesting of a dotted name and the name order,
@@ -168,28 +168,29 @@ fails, the caller does not certify.
 Which of each prototype's conditions an `OfPattern`'s spec states, and which need its `requires` evaluated, is measured
 in stage 1. A spec states an absent property (mbse-transforms' tutorial states an item without a label). Being named,
 declaring no parameters and holding nothing unbuilt at any depth need an expression evaluated, which waits on
-[CAP-142: expressions evaluated in queries](https://github.com/pitaman71/mbse-basis/blob/main/docs/capabilities/CAP-142.md#blocked)
-(question 2).
+[CAP-142: expressions evaluated in queries](https://github.com/pitaman71/mbse-basis/blob/main/docs/capabilities/CAP-142.md#blocked);
+until then they are the caller's verification (Decided, 2).
 
 ### Schemas to one module's tree, at file granularity
 
-The caller makes the copies. For a generation it makes mbse-programs' store (`Python3.store()`, every install a Python
-3 program needs) and writes in it an empty `Programs.Python3.Module`, owned by `Programs.Framework.TheWorkspace` under
-the `path` it chooses: the "(usually empty) copy". Within its transactions on the schemas' store and on that store, it
-makes each step's frames: the schema's frame of the prototype pattern, and the file's frame. Each procedure writes its
-class or its Python type alias into the file's `body`, as nested values in mbse-schemas' builders' syntax: a
-`ClassDef`'s decorators, docstring (`Expr`), fields (`AnnAssign`) and nested classes; its annotations as `Python Types`
-terms and its defaults, metadata and decorator arguments as `Python3` terms. The imports (`ImportFrom`) come first, once,
-in `Types`' order, written by the step that first needs each.
+The caller makes the copies (Decided, 1). For each application it gives, beside the schema's frame as the `source`,
+either a `target`, the frame of an empty `Programs.Python3.Module` in mbse-programs' store (`Python3.store()`), owned by
+`Programs.Framework.TheWorkspace` under a `path` it chooses, which the application replaces, or a `sync`, the frame of a
+module it already holds, which the application edits in place. The procedure writes its class or its Python type alias
+into that module's `body`, as nested values in mbse-schemas' builders' syntax: a `ClassDef`'s decorators, docstring
+(`Expr`), fields (`AnnAssign`) and nested classes; its annotations as `Python Types` terms and its defaults, metadata
+and decorator arguments as `Python3` terms; and the imports (`ImportFrom`) it needs, first, in `Types`' order. Where
+what it wrote goes from there, such as one file that gathers every class, is the caller's.
 
-The module does not depend on the order of the steps: classes and Python type aliases are in name order, and a class
-written after the classes nested in its place takes them in, as today. mbse-programs found that an upsert writing part of
-a file's value merges into it, and that writing an element of a list by its index adds it beside the others; whether a
-step can insert a class before one already written, or must write the module's `body` whole, is checked in stage 2.
+Where a caller gives one module as the `sync` of several applications, the module does not depend on their order:
+classes and Python type aliases are in name order, and a class written after the classes nested in its place takes them
+in, as today. mbse-programs found that an upsert writing part of a file's value merges into it, and that writing an
+element of a list by its index adds it beside the others; whether an application can insert a class before one already
+written, or must write the module's `body` whole, is checked in stage 2.
 
 `text(...)` is `Print.print_module(store, path)`. `problems(...)` is `Check.validate(store, path)` with the check of a
-class nested under a field's name; `Check.check(store, path, "3.12")` checks that the module needs no later Python, as
-`Python312.print` did *(agent, for review)*. A name Python cannot spell is written as the schema has it, and validation
+class nested under a field's name; `Check.check(store, path, version)` checks the module at every Python version the mbse repositories support, 3.11
+and each later one mbse-programs' standards cover (Decided, 12). A name Python cannot spell is written as the schema has it, and validation
 flags it, as today.
 
 ### Reading back
@@ -197,24 +198,24 @@ flags it, as today.
 Reading back is one transform per file until CAP-317 is met. The caller parses the source into mbse-programs' store,
 `store.transaction(Parse.parse(text, path))`, or gives a file already there. The `source` is the file's frame. The
 procedure reads the module's value in order: each `@dataclass` class as an object schema, a relation (`LINKS`), or a
-union or an intersection (`KIND`), and each Python type alias as a flat union or a named container, as `Schema` and
+union or an intersection (`KIND`), and each Python type alias, an annotated assignment `Name: TypeAlias = ...` (Decided, 12), as a flat union or a named container, as `Schema` and
 `AliasSchema` read them today, with the same refusals and messages ("Any is a dropped type, which reading cannot
-restore"). It writes the schemas through the `target`'s visitor (question 6). Reading back has no parameters, so one
-step, one transform certificate, covers a file. `frozen` and `slots` are not read back: the generation's certificates
+restore"). It writes the schemas through the `sync`'s or the `target`'s visitor, whichever the caller gives (Decided,
+6). Reading back has no parameters, so one application, one transform certificate, covers a file. `frozen` and `slots` are not read back: the generation's certificates
 keep them, as today's trace does.
 
 ### The trace becomes the certificates
 
 | Today (mbse-patterns 0.9.1's trace) | With mbse-transforms 0.1.0 |
 |---|---|
-| A session's steps, in order | A history certificate, named by the caller, in a certificates' store the caller names, holding `Transforms.install` |
-| A step: its transform's name, its match (`s`), its arguments (`frozen`, `slots`) | A transform certificate: the transform and its prototype, each by object reference; its parameter assignments; `prev` and `next` |
-| What a step matched | A sub-certificate per argument: the `source`'s frame (the schema's object reference) and the module's file's frame, each a `References.OfFrame`, with the preceding certificate on the same frame. Every step that wrote the file is chained through the file's sub-certificates |
-| Who took the step (the caller, or the policy) | The history certificate's `decisions`, `by`: `"caller"`, `"policy"`, or `"reused"` for a decision an earlier history recorded |
-| What a step wrote, a class named by its qualified name in `Codegen.Defined` | Not recorded: the sub-certificate holds the file, not the class, until [CAP-317: transforms targeting value objects](https://github.com/pitaman71/mbse-basis/blob/main/docs/capabilities/README.md#CAP-317) is met. A class is found by its qualified name in the file's value |
-| `earlier` steps, reused by key (`Dataclass(s=Contact)`, the schema's name) | A query of the earlier history: the transform certificate of the same transform whose `source` sub-certificate holds the same frame. Whether a schema's object reference is the same in a store made again, as its key by name is today, is checked in stage 3 |
+| A session's applications, in order | A history certificate, named by the caller, in a certificates' store the caller names, holding `Transforms.install` |
+| An application: its transform's name, its match (`s`), its arguments (`frozen`, `slots`) | A transform certificate: the transform and its prototype, each by object reference; its parameter assignments; `prev` and `next` |
+| What an application matched | A sub-certificate per argument: the `source`'s frame (the schema's object reference) and the `sync`'s or the `target`'s frame, each a `References.OfFrame`, with the preceding certificate on the same frame. Applications given one module as their `sync` are chained through its sub-certificates |
+| Who decided the application's parameters (the caller, or the policy) | The history certificate's `decisions`, `by`: `"caller"`, `"policy"`, or `"reused"` for a decision an earlier history recorded |
+| What an application wrote, a class named by its qualified name in `Codegen.Defined` | The sub-certificate holds the module, not the class, and a `target` given empty holds that class alone; the class itself is not recorded until [CAP-317: transforms targeting value objects](https://github.com/pitaman71/mbse-basis/blob/main/docs/capabilities/README.md#CAP-317) is met. A class is found by its qualified name in the file's value |
+| `earlier` applications, reused by key (`Dataclass(s=Contact)`, the schema's name) | A query of the earlier history: the transform certificate of the same transform whose `source` sub-certificate holds the same frame. Whether a schema's object reference is the same in a store made again, as its key by name is today, is checked in stage 3 |
 | `session.orphans`, `Transforms.diff` | The same query over two histories, compared with mbse-schemas' `Comparison`: added, removed (the orphans) and changed, as mbse-transforms' RRN-02 shows |
-| `dropped(session)` | The drop transforms' certificates in a history (question 5) |
+| `dropped(session)` | The drop transforms' certificates in a history (Decided, 5) |
 | The trace written and read as data | Certificates are mbse-schemas data, written and read by mbse-schemas' own serialization |
 
 ### A policy in place of today's choosing
@@ -226,7 +227,7 @@ With mbse-transforms a policy ranks and the caller takes. `PLAIN` becomes `Trans
 transform without parameters has one candidate a frame, which no clause needs to rank. `generate(schemas, policy,
 earlier)` is the caller: for each frame, it reuses the assignments an earlier history recorded where the query finds
 them, `by` `"reused"`; else it takes the first candidate `session.ranked(policy)` gives, `by` `"policy"`. A caller that
-decides a step itself iterates the session, takes the candidate it chooses, and certifies it `by` `"caller"`. Ties fall
+decides an application's parameters itself iterates the session, takes the candidate it chooses, and certifies it `by` `"caller"`. Ties fall
 in mbse-transforms' canonical order.
 
 ### The TypeScript side
@@ -237,7 +238,8 @@ TypeScript (`@mbse/transforms`), with the deliberate differences its
 (an options object for the arguments, parameter assignments as a record), which `Types.ts` follows. mbse-programs'
 TypeScript does not build Python 3 trees as values yet (Gaps found, 2), so the TypeScript port is a stage of its own,
 after mbse-programs' TypeScript is (stage 5), with the same cases under the same IDs and byte-identical generated
-source. Until then, question 9 decides what TypeScript's gate runs.
+source. Until then, `Types.ts` and its cases are set aside, and TypeScript's gate runs what remains, the skill's checks
+(Decided, 9).
 
 ## Stages
 
@@ -248,117 +250,70 @@ plans, and lands as a pull request. None can install until mbse-programs and mbs
 1. **Siblings, and transforms as data.** Pins mbse-schemas 0.30, mbse-transforms 0.1.0, mbse-programs 0.4 and
    mbse-expressions as mbse-programs takes it; mbse-patterns removed. `Types` 0.16's code and cases removed, to be
    written anew stage by stage. `Types.install`: each prototype pattern, its parameters, and each transform defined,
-   with cases that read them back; the measure of what each prototype's spec states (question 2).
+   with cases that read them back; the measure of what each prototype's spec states (Decided, 2).
 2. **To Python.** The procedures of `Dataclass`, `Entry`, `Union`, `Intersection`, `Alias` and `ListAlias`, and the
    drop transforms, writing the module's value; `text`, `problems` and `missing`. TYP's cases of rendering, ported.
 3. **Choosing and certificates.** `generate` with `PLAIN` and with the caller's choices; certificates; reruns from an
-   earlier history, orphans and diffs; `dropped`. TYP's cases of steps, policies and regeneration, ported.
+   earlier history, orphans and diffs; `dropped`. TYP's cases of applications, policies and regeneration, ported.
 4. **Reading back**, one transform per file; both round trips, as CAP-039 states them.
 5. **TypeScript**, after mbse-programs' TypeScript builds Python 3 trees as values: stages 1 to 4 again, the same
    cases, the generated source byte-identical; `docs/EQUIVALENCE.md` rewritten.
 6. **Skill, documents, release.** The skill, README and `AGENTS.md` name mbse-transforms where they named
-   mbse-patterns; CAP-027's As built and Current, in a pull request to mbse-basis; 0.17.0, a minor version, since its
+   mbse-patterns; CAP-027's As built and Current, its Python type aliases written as annotated assignments (Decided,
+   12), in a pull request to mbse-basis; 0.17.0, a minor version, since its
    dependents must adapt ([PRI-031: the version is the contract](https://github.com/pitaman71/mbse-basis/blob/main/docs/PRINCIPLES.md#PRI-031)),
    tagged when both languages pass. The tutorials and the skill's notebook links,
    [CAP-246: mbse-codegen-python's tutorials](https://github.com/pitaman71/mbse-basis/blob/main/docs/capabilities/README.md#CAP-246)
    and [CAP-247: mbse-codegen-python's skill linking its notebook cases](https://github.com/pitaman71/mbse-basis/blob/main/docs/capabilities/README.md#CAP-247),
    come after the port, as INI-003 orders them.
 
-Stages 2 to 4 also wait on question 3.
+Stages 2 to 4 also wait on mbse-schemas' frame transducer (Decided, 3; Gaps found, 3).
 
-## Questions for the user
+## Decided
 
-1. **Which argument carries the module's file to Python?** Every step writes its class into the same file, which holds
-   the classes earlier steps wrote.
-   - (a) `sync`: the file, edited in place by each step.
-   - (b) `target`: the file, as mbse-transforms' first-release proposal wrote it ("Its `source` is the schemas' store,
-     its `target` the module's"), though after the first step the file is no longer empty and is not replaced.
+What the user and the specs settle, each with its source; nothing is left open.
 
-   *Recommended: (a).* A step adds to the file, which is editing a copy in place.
-2. **Where do a prototype's conditions go that need an expression evaluated**, until CAP-142 is met?
-   - (a) Wait for CAP-142.
-   - (b) State them now as the prototype's `requires`, its spec stating what is structural, and have the caller
-     evaluate the `requires` on each frame with mbse-expressions before the frame reaches the session; when CAP-142 is
-     met, the query evaluates it, and only the caller's evaluation goes. Whether mbse-expressions evaluates a term over
-     a frame's visitors is checked in stage 1.
-   - (c) Leave them out of the prototype: the procedure writes nothing where a condition fails, and the caller's
-     verification declines to certify, as mbse-transforms' first-release proposal suggested ("into procedures'
-     verifications where they need expressions until CAP-142").
-
-   *Recommended: (b).* The prototype holds every condition as data from the start, and (a) stops the port.
-3. **How does `Types` make its frames**, while a query's frames are given back after its transaction ends (Gaps found,
-   3)?
-   - (a) Wait for mbse-schemas' frame transducer.
-   - (b) Take the route mbse-transforms' tests take: find each object again from its object reference's plain form,
-     a dependency on what CAP-132 makes internal, guarded by a case.
-   - (c) Find each schema and the file by navigating from their singletons within the caller's transaction, and make
-     each frame there; the prototype's spec is then checked by no query.
-
-   *Recommended: (a),* as [PRI-032: a sibling's gap is reported, not worked around](https://github.com/pitaman71/mbse-basis/blob/main/docs/PRINCIPLES.md#PRI-032)
-   has it. Stage 1 does not need frames. (b) is the route if stages 2 to 4 must not wait.
-4. **One drop transform per reason, or per reason and kind of schema?** A transform is owned by the catalog under its
-   name, so the twelve drop transforms that share three names today cannot all be defined.
-   - (a) One transform per reason, its prototype's symbol taking any kind of schema the reason applies to, if a
-     pattern's symbol can take several kinds (checked in stage 1).
-   - (b) One transform per reason and kind, each with a name of its own (`DropInlineObject`, `DropInlineUnion`, ...).
-
-   *Recommended: (a)* where mbse-schemas allows it, else (b).
-5. **How are the drops reported?** A drop step drops a schema at one place or several, each named today by `where` (a
-   property, a branch, `name[item]`).
-   - (a) The certificates are the report: `dropped` lists each drop certificate's schema and transform, and computes
-     each place from the schema, as `Types` computes it today.
-   - (b) The drop procedure writes a record of each place into an output the caller gives as a `sync`, as
-     `Codegen.Dropped` is today.
-   - (c) A drop transform binds the property or adjacency itself, which mbse-schemas 0.30 makes an owned reference
-     object, and the schema where the place is a branch, a part or a link, which are relation entries.
-
-   *Recommended: (a).* The trace stays the report, as CAP-027 decided, and nothing is written twice.
-6. **Reading back: what does the step write into, and how many transforms?**
-   - (a) One transform, `Schema`, `AliasSchema` merged into it; `source` the file's frame, `target` the frame of a
-     `Schemas.OfModule` the caller makes, empty, in the schemas' store.
-   - (b) Two transforms, one for classes and one for Python type aliases, each over the same file's frame.
-   - (c) As (a), with `sync` the frame of the store's root module (`.`) in place of a module of its own.
-
-   *Recommended: (a).* A file is read whole at file granularity, and a new module is the "(usually empty) copy that is
-   to be replaced".
-7. **CAP-027's bridges on mbse-schemas 0.30's schemas.** A scalar is one of the five basic scalars, with no name, token,
-   format or width ([CAP-156: the five basic scalars with boundless domains](https://github.com/pitaman71/mbse-basis/blob/main/docs/capabilities/CAP-156.md)):
-   a finer scalar is mbse-expressions' domain. A list is a container by an index of any schema
-   ([CAP-108: relations as scalable containers](https://github.com/pitaman71/mbse-basis/blob/main/docs/capabilities/CAP-108.md)).
-   So `NativeAlias`, `DropFormat`, a `python3` token and a width's `Annotated` metadata have nothing to match.
-   - (a) Port what has a counterpart: lists become containers, `NativeAlias` and `DropFormat` go, and widths and
-     tokens leave `Annotated` metadata; bridging mbse-expressions' domains is a capability for the user to open.
-   - (b) Bridge mbse-expressions' domains in this port.
-
-   *Recommended: (a).* The port stays a port, and every row with a counterpart keeps its form.
-8. **Keys a `dict` cannot hold faithfully.** CAP-027 decided "dict keyed by a wrapper", in mbse-schemas,
-   `Proxies.OfIndexed.Map`, which mbse-schemas 0.30.1 no longer has (Gaps found, 4).
-   - (a) Ask mbse-schemas for a public run-time keyed container that compares keys as schema equality does; until it
-     exists, a container keyed by a `float`, a container or a value object has no Python form, and `missing` reports
-     the schema holding it.
-   - (b) A `dict` for every hashable index, as CAP-108 decided for a container in the target language, losing `-0.0`
-     against `0.0` and every NaN, which CAP-027 decided against.
-
-   *Recommended: (a).*
-9. **TypeScript while Python ports.** Both gates must pass at each stage, and `Types.ts` cannot be ported until
-   mbse-programs' TypeScript is.
-   - (a) Set TypeScript's `Types.ts` and its cases aside, as mbse-programs set its other languages aside, its gate
-     running what remains (the skill's checks), and restore them in stage 5.
-   - (b) Port TypeScript with each stage, which waits on mbse-programs' TypeScript from stage 2.
-
-   *Recommended: (a),* Python first, as mbse-transforms' and mbse-programs' ports did.
-10. **`Codegen.Output`.** Today the output singleton links the module (`Codegen.Generated`), what it defines
-    (`Codegen.Defined`) and the drops (`Codegen.Dropped`), so that a predicate could match them.
-    - (a) Retire it: the file is the output, what it defines is read from its value, and the drops are certificates.
-    - (b) Keep it, in mbse-programs' store, beside the file.
-
-    *Recommended: (a).* No prototype matches the output any more.
-11. **Names.** The prototype patterns need names, and question 6 merges a transform.
-    - (a) Each prototype is named `Codegen.<transform>` (`Codegen.Dataclass`), and the merged reading-back transform
-      keeps the name `Schema`.
-    - (b) Names the user gives.
-
-    *Recommended: (a).*
+1. **The arguments are the caller's.** A transform does not know the file: "The transforms application procedure does
+   not need to know how copies are made since it takes Visitors.OfPattern as an argument." A generating transform takes
+   the schema's frame as its `source`, and a `sync` (a module edited in place) or a `target` (an empty module,
+   replaced), whichever the caller gives; where what it wrote goes from there is the caller's.
+2. **A condition that needs an expression is the caller's verification** until CAP-142 is met, as mbse-transforms'
+   first-release proposal has it: its predicates move "into procedures' verifications where they need expressions until
+   CAP-142". The procedure does not branch on it.
+3. **Frames wait on mbse-schemas' frame transducer.** "A gap or bug found in a sibling is reported to the user ... it is
+   fixed in the sibling ... never worked around locally"
+   ([PRI-032: a sibling's gap is reported, not worked around](https://github.com/pitaman71/mbse-basis/blob/main/docs/PRINCIPLES.md#PRI-032)).
+4. **One drop transform per reason and kind of schema**, each under a name of its own, since the catalog holds each
+   transform under its name, as CAP-027 has it: "A reason applies to several kinds of schema, and a transform's symbol
+   to one, so each reason is a transform per kind it applies to". They are `DropInlineObject`, `DropInlineRelation`,
+   `DropInlineUnion`, `DropInlineIntersection`, `DropInlineContainer` and `DropUndeclared`.
+5. **The certificates are the drop report**, CAP-027's trace being the report ("A report of all dropped types and reasons
+   should be easy to obtain ... as dropping transform steps"); `dropped` reads the drop transforms' certificates.
+6. **Reading back is one transform, `Schema`**, `AliasSchema` merged into it: at file granularity both would bind the
+   same file. Its `source` is the file's frame, and its `sync` or `target` is the caller's (1).
+7. **Only what has a counterpart in mbse-schemas 0.30 is ported.** A scalar is one of the five basic scalars
+   ([CAP-156: the five basic scalars with boundless domains](https://github.com/pitaman71/mbse-basis/blob/main/docs/capabilities/CAP-156.md)),
+   and a list a container
+   ([CAP-108: relations as scalable containers](https://github.com/pitaman71/mbse-basis/blob/main/docs/capabilities/CAP-108.md)):
+   `NativeAlias` and `DropFormat` go, and widths and tokens leave the `Annotated` metadata. Bridging mbse-expressions'
+   domains would be a capability of its own, for the user to open.
+8. **The keyed container is asked of mbse-schemas** (PRI-032, as in 3). Until it has a public run-time keyed container
+   comparing keys as schema equality does, a container keyed by a `float`, a container or a value object has no Python
+   form, and `missing` reports the schema holding it.
+9. **Python first**, TypeScript a stage of its own, as in mbse-transforms
+   ([its first-release proposal](https://github.com/pitaman71/mbse-transforms/blob/main/docs/proposals/first-release/README.md#decided),
+   Decided, 1) and mbse-programs' port.
+10. **`Codegen.Output` is retired**: where what the transforms write goes is the caller's (1).
+11. **Names**: each prototype is `Codegen.<transform>` (`Codegen.Dataclass`), and the merged reading-back transform keeps
+    the name `Schema`.
+12. **Generated code is checked at every supported Python version**: "for unit testing, generated code must be checked
+    at 3.11, 3.12, etc. you may not cull the compatibility targets". The mbse repositories support Python 3.11 and later
+    (`requires-python = ">=3.11"` in polyrepo's repository template), so each generated module passes `Check.check` at
+    3.11 and at each later version mbse-programs' standards cover. The `type` statement needs Python 3.12, so `Alias`
+    and `ListAlias` write a Python type alias as an annotated assignment, `Name: TypeAlias = ...`, valid from Python
+    3.10, which `Schema` reads back; CAP-027 is changed to it in stage 6.
+13. **mbse-expressions stays in `siblings.json`**: "this is a polyrepo project in which "transitive" dependencies
+    intentionally look like peers".
 
 ## Gaps found
 
@@ -386,21 +341,22 @@ Each is reported, not worked around
    12): a caller gets object references, not the `Visitors.OfPattern` an application takes, and mbse-schemas has no
    public way to make one. `generate` and `read` are such callers. mbse-schemas' answer, the frame transducer, is open
    there ([its transaction-object proposal](https://github.com/pitaman71/mbse-schemas/blob/main/docs/proposals/transaction-object/README.md#decided)).
-   Question 3.
+   Decided, 3.
 4. **`Proxies.OfIndexed.Map` is gone.** CAP-027 decided that generated code imports mbse-schemas' run-time keyed
    container for keys a `dict` cannot hold faithfully ("dict keyed by a wrapper", in mbse-schemas, "(b)"). mbse-schemas
-   0.30.1 has no `Proxies.OfIndexed`, and its `Proxies` exports no keyed container a module could import. Question 8.
+   0.30.1 has no `Proxies.OfIndexed`, and its `Proxies` exports no keyed container a module could import. Decided, 8.
 5. **A prototype's conditions that need an expression wait on CAP-142**, already blocked
    ([CAP-142: expressions evaluated in queries](https://github.com/pitaman71/mbse-basis/blob/main/docs/capabilities/CAP-142.md#blocked)).
-   Question 2.
+   Decided, 2.
 
 ## Risks
 
-- **Inserting into a file's value.** Name order may need a class written before one already in the module's `body`;
-  if a step cannot insert there, it writes the `body` whole (stage 2 checks it).
+- **Inserting into a module's value.** Where one module is the `sync` of several applications, name order may need a
+  class written before one already in its `body`; if an application cannot insert there, it writes the `body` whole
+  (stage 2 checks it).
 - **Cost.** Executing a parse's transaction costs about 4.6 ms a statement (mbse-programs' sibling gaps, 11), and each
-  step writes the file again; a large schema set generates more slowly than today.
-- **Lost links.** Until CAP-317 is met, no certificate links the class a step wrote, which today's trace does.
+  application writes its module; a large schema set generates more slowly than today.
+- **Lost links.** Until CAP-317 is met, no certificate links the class an application wrote, which today's trace does.
 - **Equivalence.** The TypeScript port waits on another repository, and the release waits for it.
 
 ---
