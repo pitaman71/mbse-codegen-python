@@ -250,7 +250,8 @@ plans, and lands as a pull request.
    mbse-expressions 0.15.2, mbse-programs 0.5.1 and mbse-transforms 0.3.1, each required `<1.0`
    ([PRI-031: the version is the contract](https://github.com/pitaman71/mbse-basis/blob/main/docs/PRINCIPLES.md#PRI-031));
    mbse-patterns removed; 0.17.0. `Types` 0.16's code and cases removed, to be written anew stage by stage.
-   `Types.install`: each prototype pattern, its parameters, and each transform defined, with cases that read them back
+   `Types.install`: each prototype pattern and its parameters; each transform defined, an install of its own, among
+   `Types.INSTALLS`, as every repository's `INSTALLS` runs its installs; with cases that read them back
    (suite INS); the measure of what each prototype's spec states (Decided, 2).
 
    **Measured** (INS-04): each prototype, run as a query over a store of schemas of every kind, keeps the schemas the
@@ -373,13 +374,6 @@ Each is reported, not worked around
    ([CAP-142: expressions evaluated in queries](https://github.com/pitaman71/mbse-basis/blob/main/docs/capabilities/CAP-142.md#blocked)).
    Decided, 2. Stage 1 measured which they are (Stages, 1): holding nothing unbuilt at any depth, a link no object
    schema declares, what a drop drops, and a union's `flat` false or absent.
-6. **`Transforms.define` gives a whole transaction, which defines one transform.** It sets the transaction's
-   expression, so a second call in one transaction replaces the first, and an install cannot define several transforms
-   in one transaction, as `Types.install(txn)` was to define the thirteen. `Types.install` writes the prototypes alone,
-   and `Types.INSTALLS` runs, each in a transaction of its own, everything a store holding the transforms needs, one
-   definition per transform among them, as mbse-programs' `Python3.INSTALLS` runs its installs. Reported to
-   mbse-transforms, whether `define` should give a term, or define several transforms at once.
-
 ## Risks
 
 - **Inserting into a module's value.** Where one module is the `sync` of several applications, name order may need a

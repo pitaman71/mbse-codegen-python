@@ -6,9 +6,9 @@ A transform is data: "A transform has a prototype, a procedure, and a cerificate
 prototypes, mbse-schemas patterns, each named `Codegen.<transform>` (the port proposal, Decided, 11), each declaring the
 transform's parameters through mbse-schemas' `Parametrics`; `frozen` and `slots` are `Schemas.OfBool` parameters. Each
 transform is then defined by `Transforms.define`, owned by mbse-transforms' catalog (`Transforms.TheCatalog`) under its
-name, naming its procedure. mbse-transforms' `define` gives the whole transaction that defines one transform, so each
-definition runs in a transaction of its own: `INSTALLS` lists, in the order they run, every install a store holding the
-transforms needs, each run in a transaction of its own, as mbse-programs' `Python3.INSTALLS` does *(agent)*.
+name, naming its procedure; a definition is an install like any other. `INSTALLS` lists, in the order they run,
+every install a store holding the transforms needs, each run in a transaction of its own, as every repository's
+`INSTALLS` does (mbse-programs' `Python3.INSTALLS` among them).
 
 The transforms, as the port proposal's table has them (Decided, 4, 6 and 7):
 
