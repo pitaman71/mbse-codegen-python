@@ -4,7 +4,8 @@
   ],
   "exclude": [
     "tests/**",
-    "src/skill/**"
+    "src/skill/**",
+    "src/Types.ts"
   ],
   "reporter": [
     "text"

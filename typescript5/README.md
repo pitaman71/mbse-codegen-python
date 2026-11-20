@@ -4,7 +4,7 @@
 # mbse-codegen-python (TypeScript)
 
 The TypeScript implementation of [mbse-codegen-python](https://github.com/pitaman71/mbse-codegen-python):
-`@mbse/codegen-python`, beside `@mbse/schemas`, `@mbse/expressions`, `@mbse/patterns` and `@mbse/programs`. Both
+`@mbse/codegen-python`, beside `@mbse/schemas`, `@mbse/expressions`, `@mbse/programs` and `@mbse/transforms`. Both
 implementations generate the same Python. See the repository's README.
 
 ---
