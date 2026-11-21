@@ -10,8 +10,8 @@ Python 3 module's tree as one value) and mbse-schemas 0.30. Its design and decis
 [CAP-027: Python3 source generated from schemas](https://github.com/pitaman71/mbse-basis/blob/main/docs/capabilities/CAP-027.md)'s,
 and [CAP-039: schemas round-trip through Python3](https://github.com/pitaman71/mbse-basis/blob/main/docs/capabilities/CAP-039.md)
 states the round trips it keeps. The [first-release proposal](https://github.com/pitaman71/mbse-transforms/blob/main/docs/proposals/first-release/README.md#what-mbse-codegen-python-then-needs-of-it)
-of mbse-transforms says what this repository then needs of it. No code is written until the user has reviewed it, and
-the port cannot install until mbse-programs and mbse-expressions move to mbse-schemas 0.30 (Gaps found, 1).
+of mbse-transforms says what this repository then needs of it. Stage 1 is built (0.17.0), against the siblings as
+it pins them (Gaps found, 1).
 
 ## Where it stands
 
@@ -147,7 +147,7 @@ on the module's side alone.
 | `Union` | `s`, a `Schemas.OfUnion`: named, not `flat`, with branches, declaring no parameters, holding nothing unbuilt | Writes a value class of a field per branch, `KIND = "union"` | `frozen`, `slots` | as `Dataclass` |
 | `Intersection` | `s`, a `Schemas.OfIntersection`: as `Union`, with parts, `flat` or not | Writes a value class of a field per part, or of its parts' properties where `flat` (`PARTS`, `DESCRIPTIONS`) | `frozen`, `slots` | as `Dataclass` |
 | `Alias` | `s`, a `Schemas.OfUnion`: named, `flat`, with branches, declaring no parameters, holding nothing unbuilt | Writes a Python type alias of its branches, as an annotated assignment, `Name: TypeAlias = ...` (Decided, 12), `Annotated` where branch names or descriptions need it | none | as `Dataclass` |
-| `ListAlias` | `s`, a `Schemas.OfContainer`: named, its element and index holding nothing unbuilt | Writes a Python type alias of `list[...]` or `dict[...]`, as `Alias` does (Decided, 7, 8 and 12) | none | as `Dataclass` |
+| `ListAlias` | `s`, a `Schemas.OfContainer`: named, declaring no parameters, its element and index holding nothing unbuilt | Writes a Python type alias of `list[...]` or `dict[...]`, as `Alias` does (Decided, 7, 8 and 12) | none | as `Dataclass` |
 | `DropInlineObject`, `DropInlineRelation`, `DropInlineUnion`, `DropInlineIntersection`, `DropInlineContainer`, `DropUndeclared` (Decided, 4 and 7) | A schema of its kind holding a schema dropped for the reason | Writes nothing: the certificate records the drop (Decided, 5) | none | `source` alone |
 | `Schema`, with `AliasSchema` merged into it (Decided, 6) | `m`, a `Programs.Python3.Module` | Reads every dataclass and Python type alias in `m`'s value, in order, and writes the schemas each describes | none | `source`: `m`'s frame; a `sync` or a `target`, as the caller gives |
 
@@ -244,13 +244,36 @@ source. Until then, `Types.ts` and its cases are set aside, and TypeScript's gat
 ## Stages
 
 Each stage passes both gates at 100% (`uv run coverage ...` and `npm run coverage`) with the cases it adds in both test
-plans, and lands as a pull request. None can install until mbse-programs and mbse-expressions take mbse-schemas 0.30
-(Gaps found, 1), which another session owns.
+plans, and lands as a pull request.
 
-1. **Siblings, and transforms as data.** Pins mbse-schemas 0.30, mbse-transforms 0.1.0, mbse-programs 0.4 and
-   mbse-expressions as mbse-programs takes it; mbse-patterns removed. `Types` 0.16's code and cases removed, to be
-   written anew stage by stage. `Types.install`: each prototype pattern, its parameters, and each transform defined,
-   with cases that read them back; the measure of what each prototype's spec states (Decided, 2).
+1. **Siblings, and transforms as data.** Pins the siblings at their main as stage 1 found them, mbse-schemas 0.35.0,
+   mbse-expressions 0.15.2, mbse-programs 0.5.1 and mbse-transforms 0.3.1, each required `<1.0`
+   ([PRI-031: the version is the contract](https://github.com/pitaman71/mbse-basis/blob/main/docs/PRINCIPLES.md#PRI-031));
+   mbse-patterns removed; 0.17.0. `Types` 0.16's code and cases removed, to be written anew stage by stage.
+   `Types.install`: each prototype pattern and its parameters; each transform defined, an install of its own, among
+   `Types.INSTALLS`, as every repository's `INSTALLS` runs its installs; with cases that read them back
+   (suite INS); the measure of what each prototype's spec states (Decided, 2).
+
+   **Measured** (INS-04): each prototype, run as a query over a store of schemas of every kind, keeps the schemas the
+   conditions below state, and what needs an expression is the caller's verification. A symbol of a kind of schema
+   (`Schemas.OfObject`) binds named schemas alone, so being named needs no spec item. `S` is the transaction's
+   `txn.Schemas`.
+
+   | Prototype | Stated by its spec | Needs an expression (CAP-142) |
+   |---|---|---|
+   | `Codegen.Dataclass`, `s`: `S.OfObject` | named; `_.s.parameters(lambda a: a.clear())`; `_.s.adjacencies(lambda a: a.remove(lambda e: e.adjacency(lambda j: j.relation([S.OfRelation(lambda r: r.parameters(lambda b: b.insert(lambda h: h)))]))))` | holding nothing unbuilt, at any depth |
+   | `Codegen.Entry`, `r`: `S.OfRelation` | named; `_.r.parameters(lambda a: a.clear())` | holding nothing unbuilt; no link declared by an object schema declaring parameters, since a declarer is reached only through the relation's anonymous adjacency (`Schemas.Relating`), which no spec names |
+   | `Codegen.Union`, `s`: `S.OfUnion` | named; `_.s.flat(False).branches(lambda a: a.insert(lambda e: e)).parameters(lambda a: a.clear())` | holding nothing unbuilt. `flat(False)` keeps a union that never sets `flat`, which reads false (INS-04's `book.Reach`); only a union whose `flat` is cleared (`flat(None)`, absent) passes neither this spec nor `Codegen.Alias`'s, since a spec states a value or its absence, never "false or absent" |
+   | `Codegen.Intersection`, `s`: `S.OfIntersection` | named; `_.s.parts(lambda a: a.insert(lambda e: e)).parameters(lambda a: a.clear())` | holding nothing unbuilt, a flat intersection's inline parts' properties included |
+   | `Codegen.Alias`, `s`: `S.OfUnion` | named; `_.s.flat(True).branches(lambda a: a.insert(lambda e: e)).parameters(lambda a: a.clear())` | holding nothing unbuilt |
+   | `Codegen.ListAlias`, `s`: `S.OfContainer` | named; `_.s.parameters(lambda a: a.clear())` | its element and index holding nothing unbuilt |
+   | `Codegen.DropInlineObject`, `DropInlineRelation`, `DropInlineUnion`, `DropInlineIntersection` and `DropInlineContainer`, each `s` or `r` of its kind | named | holding an inline object, union or intersection where a property, a branch, a part, an element or an index holds a schema, at any depth within inline containers, or, for an object schema, an adjacency to an inline relation: each disjunct, one level deep and of one kind, is stated (`_.s.properties(lambda a: a.insert(lambda e: e.property(lambda p: p.schema([S.OfObject(lambda o: o.name(None))]))))`), and their disjunction at any depth is not |
+   | `Codegen.DropUndeclared`, `r`: `S.OfRelation` | named | a link no object schema declares, as `Codegen.Entry`'s |
+   | `Codegen.Schema`, `m`: `Programs.Python3.Module` | every module | nothing |
+
+   Holding nothing unbuilt is stated one level deep and one kind at a time, as a removal
+   (`_.s.properties(lambda a: a.remove(lambda e: e.property(lambda p: p.schema([S.OfObject(lambda o: o.parameters(lambda b: b.insert(lambda h: h)))])))))`),
+   and at any depth it is not; the prototypes state no part of a condition that needs an expression.
 2. **To Python.** The procedures of `Dataclass`, `Entry`, `Union`, `Intersection`, `Alias` and `ListAlias`, and the
    drop transforms, writing the module's value; `text`, `problems` and `missing`. TYP's cases of rendering, ported.
 3. **Choosing and certificates.** `generate` with `PLAIN` and with the caller's choices; certificates; reruns from an
@@ -260,7 +283,7 @@ plans, and lands as a pull request. None can install until mbse-programs and mbs
    cases, the generated source byte-identical; `docs/EQUIVALENCE.md` rewritten.
 6. **Skill, documents, release.** The skill, README and `AGENTS.md` name mbse-transforms where they named
    mbse-patterns; CAP-027's As built and Current, its Python type aliases written as annotated assignments (Decided,
-   12), in a pull request to mbse-basis; 0.17.0, a minor version, since its
+   12), in a pull request to mbse-basis; 0.17.0, the minor version stage 1 set, since its
    dependents must adapt ([PRI-031: the version is the contract](https://github.com/pitaman71/mbse-basis/blob/main/docs/PRINCIPLES.md#PRI-031)),
    tagged when both languages pass. The tutorials and the skill's notebook links,
    [CAP-246: mbse-codegen-python's tutorials](https://github.com/pitaman71/mbse-basis/blob/main/docs/capabilities/README.md#CAP-246)
@@ -320,7 +343,9 @@ What the user and the specs settle, each with its source; nothing is left open.
 Each is reported, not worked around
 ([PRI-032: a sibling's gap is reported, not worked around](https://github.com/pitaman71/mbse-basis/blob/main/docs/PRINCIPLES.md#PRI-032)).
 
-1. **mbse-programs and mbse-expressions require mbse-schemas below 0.29; mbse-transforms requires 0.30.1 or later.**
+1. **Resolved by stage 1's pins: mbse-schemas 0.35.0, mbse-expressions 0.15.2, mbse-programs 0.5.1 and mbse-transforms
+   0.3.1 each require the others `<1.0`, and install together.** As measured before them:
+   **mbse-programs and mbse-expressions required mbse-schemas below 0.29; mbse-transforms required 0.30.1 or later.**
    mbse-programs 0.4.0 requires `mbse-schemas>=0.28.0,<0.29` and `mbse-expressions>=0.11.1,<0.12` (its
    `pyproject.toml`; its `siblings.json` pins mbse-schemas 0.28.0 and mbse-expressions 0.11.1). mbse-expressions 0.12.1,
    its main, requires `mbse-schemas>=0.28.0,<0.29`. mbse-transforms 0.1.0 requires `mbse-schemas>=0.30.1,<0.31` and pins
@@ -347,8 +372,11 @@ Each is reported, not worked around
    0.30.1 has no `Proxies.OfIndexed`, and its `Proxies` exports no keyed container a module could import. Decided, 8.
 5. **A prototype's conditions that need an expression wait on CAP-142**, already blocked
    ([CAP-142: expressions evaluated in queries](https://github.com/pitaman71/mbse-basis/blob/main/docs/capabilities/CAP-142.md#blocked)).
-   Decided, 2.
-
+   Decided, 2. Stage 1 measured which they are (Stages, 1): holding nothing unbuilt at any depth, a link no object
+   schema declares, what a drop drops, and a union's `flat` false or cleared (a union that never sets `flat` reads
+   false, and `Codegen.Union`'s `flat(False)` keeps it). A callback in a spec cannot stand in for one: it is recorded
+   as the expression is built, never evaluated against each candidate, and silently matches nothing (mbse-schemas'
+   decoupled-code proposal, Gaps found, 5).
 ## Risks
 
 - **Inserting into a module's value.** Where one module is the `sync` of several applications, name order may need a

@@ -4,7 +4,7 @@
 # mbse-codegen-python (Python)
 
 The Python implementation of [mbse-codegen-python](https://github.com/pitaman71/mbse-codegen-python):
-`mbse.Codegen.Python`, beside `mbse.Schemas`, `mbse.Expressions`, `mbse.Patterns` and `mbse.Programs` in the shared
+`mbse.Codegen.Python`, beside `mbse.Schemas`, `mbse.Expressions`, `mbse.Programs` and `mbse.Transforms` in the shared
 `mbse` namespace package. See the repository's README.
 
 ---

@@ -5,13 +5,21 @@ description: Generate Python dataclasses from mbse-schemas schemas, and read dat
 
 # mbse-codegen-python
 
-Code generated from a specification keeps the two from drifting ([FEA-022: code generation](../../../mbse-basis/docs/features/README.md#FEA-022)).
+**Being ported: what follows teaches 0.16's API, which 0.17 removed.** mbse-codegen-python 0.17 ports `Types` onto
+[mbse-transforms](https://github.com/pitaman71/mbse-transforms), stage by stage, as
+[the port proposal](mbse:mbse-codegen-python/docs/proposals/port/README.md#stages) says, and its stage 6 rewrites this
+skill. Until then, the programs below are tagged `python 0.16` and `typescript 0.16`, and no check runs them. What
+0.17 has so far is the transforms as data: `Types.install`, each transform's prototype, and `Types.INSTALLS`, everything
+a store holding the transforms needs, the transforms defined in mbse-transforms' catalog
+([the transforms as data](mbse:mbse-codegen-python/docs/proposals/port/README.md#each-transform-as-mbse-transforms-has-it)).
+
+Code generated from a specification keeps the two from drifting ([FEA-022: code generation](mbse:mbse-basis/docs/features/README.md#FEA-022)).
 `Types` renders the object schemas a store registers (and those they refer to) as Python dataclasses, and reads a
 module's dataclasses back as schemas. Each is a session of [mbse-patterns](https://github.com/pitaman71/mbse-patterns)'
 transforms, one step per decision, over one store: the schemas, Python's syntax trees
 ([mbse-programs](https://github.com/pitaman71/mbse-programs)) and the output module.
 
-```python
+```python 0.16
 from mbse.Codegen.Python import Types
 from mbse.Patterns import Transforms as T
 from mbse.Programs.Python import Python312
@@ -66,7 +74,7 @@ proxy = owning.Owner().items(lambda e: e.item(owning.Item().create()).since(2020
 assert years(owner) == years(proxy) == [2020]
 ```
 
-```typescript
+```typescript 0.16
 import { Types } from "@mbse/codegen-python";
 import { Transforms as T } from "@mbse/patterns";
 import { Python312 } from "@mbse/programs/Python";
@@ -117,7 +125,7 @@ check(proxy.items.map((entry: any) => entry.since).join() === "2020", "proxies")
    no `__dict__`; an entry class has `slots` only); a policy (`T.Policy(T.Clause("Dataclass", {"frozen": False,
    "slots": True}))`, `Types.PLAIN`) ranks the candidates, and `session.take(candidate)` is the caller deciding.
    `session.steps` is the trace, and `session.trace(...)` writes it as data. Why each ambiguity is a parameter:
-   [FEA-021: every generation ambiguity a parameter](../../../mbse-basis/docs/features/FEA-021.md).
+   [FEA-021: every generation ambiguity a parameter](mbse:mbse-basis/docs/features/FEA-021.md).
 2. **What renders.** Each named schema a step can take becomes a class or a type alias: an object schema a
    `@dataclass` (`eq=False` for a reference schema), a relation the class of its entries, with each adjacency a
    dataclass field holding them (`phones: tuple[Phones, ...] = ()`), a union or an intersection a value class (or,
@@ -126,24 +134,24 @@ check(proxy.items.map((entry: any) => entry.since).join() === "2020", "proxies")
    `Annotated` metadata. Three calls report what did not render: `Types.problems(session)`, names Python cannot spell
    (`Types.text(session)` raises `ValueError` while any remain); `Types.dropped(session)`, each schema a step dropped
    to `Any`, with its reason and place; and `Types.missing(session)`, the schemas left without a class or alias. Each
-   construct's bridge and why: [CAP-027: Python3 source generated from schemas](../../../mbse-basis/docs/capabilities/CAP-027.md#bridges)
-   and its [Decided](../../../mbse-basis/docs/capabilities/CAP-027.md#decided) section; nothing is lost silently, after
-   [PRI-002: preserve, don't lose](../../../mbse-basis/docs/PRINCIPLES.md#PRI-002); code reads generated classes as it reads proxies, after
-   [PRI-010: proxies and generated code read alike](../../../mbse-basis/docs/PRINCIPLES.md#PRI-010).
+   construct's bridge and why: [CAP-027: Python3 source generated from schemas](mbse:mbse-basis/docs/capabilities/CAP-027.md#bridges)
+   and its [Decided](mbse:mbse-basis/docs/capabilities/CAP-027.md#decided) section; nothing is lost silently, after
+   [PRI-002: preserve, don't lose](mbse:mbse-basis/docs/PRINCIPLES.md#PRI-002); code reads generated classes as it reads proxies, after
+   [PRI-010: proxies and generated code read alike](mbse:mbse-basis/docs/PRINCIPLES.md#PRI-010).
 3. **What reads back.** A `@dataclass` class (`@dataclass(...)` too) whose annotations are written as `Dataclass`
    writes them, `| None` or not; anything else raises `ValueError` naming the dataclass field. Reading registers the
    schemas in the store given, and fills a schema a dataclass field names when its class is read:
-   [CAP-039: schemas round-trip through Python3](../../../mbse-basis/docs/capabilities/CAP-039.md). mbse-schemas' own adapter reads live
-   classes instead: [CAP-162: Python dataclasses translated to and from schemas](../../../mbse-basis/docs/capabilities/CAP-162.md).
+   [CAP-039: schemas round-trip through Python3](mbse:mbse-basis/docs/capabilities/CAP-039.md). mbse-schemas' own adapter reads live
+   classes instead: [CAP-162: Python dataclasses translated to and from schemas](mbse:mbse-basis/docs/capabilities/CAP-162.md).
 4. **Regenerating.** `Types.generate(schemas, policy, earlier=session.steps)` takes each earlier decision again where
    its key (`Dataclass(s=Contact)`) still occurs: after the schemas change, only new schemas ask. `session.orphans` are
    decisions about schemas now gone; `Transforms.diff(earlier, later)` compares two generations:
-   [CAP-076: reruns reuse decisions](../../../mbse-basis/docs/capabilities/CAP-076.md).
+   [CAP-076: reruns reuse decisions](mbse:mbse-basis/docs/capabilities/CAP-076.md).
 5. **Round trips.** Schemas to source to schemas gives the same schemas; source to schemas to source gives the source as
    Python 3.12 prints it, given the same decisions. `frozen` and `slots` are what a schema does not hold: the trace
-   keeps them. [CAP-039: schemas round-trip through Python3](../../../mbse-basis/docs/capabilities/CAP-039.md).
+   keeps them. [CAP-039: schemas round-trip through Python3](mbse:mbse-basis/docs/capabilities/CAP-039.md).
 
 A schema with parameters or terms has no class, and `Types.missing` reports it. The parametric bridge is
-[CAP-047: parametric schemas as Python3 generics](../../../mbse-basis/docs/capabilities/README.md#CAP-047),
-[CAP-048: terms in generated Python3](../../../mbse-basis/docs/capabilities/README.md#CAP-048) and
-[CAP-049: type parameters in Python3](../../../mbse-basis/docs/capabilities/README.md#CAP-049).
+[CAP-047: parametric schemas as Python3 generics](mbse:mbse-basis/docs/capabilities/README.md#CAP-047),
+[CAP-048: terms in generated Python3](mbse:mbse-basis/docs/capabilities/README.md#CAP-048) and
+[CAP-049: type parameters in Python3](mbse:mbse-basis/docs/capabilities/README.md#CAP-049).

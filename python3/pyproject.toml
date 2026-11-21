@@ -4,13 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mbse-codegen-python"
-version = "0.16.0"
-description = "Schemas as idiomatic Python source and back: mbse-schemas' schemas rendered as dataclasses through mbse-programs' syntax trees, step by step, by mbse-patterns' transforms"
+version = "0.17.0"
+description = "Schemas as idiomatic Python source and back: mbse-schemas' schemas rendered as dataclasses through mbse-programs' syntax trees, step by step, by mbse-transforms' transforms"
 keywords = ["code generation", "python", "dataclasses", "schemas", "mbse", "transforms"]
 readme = "README.md"
 requires-python = ">=3.11"
-dependencies = ["mbse-schemas>=0.10.0,<0.11", "mbse-expressions>=0.5.4,<0.6", "mbse-patterns>=0.9.1,<0.10",
-                "mbse-programs>=0.3.28,<0.4"]
+dependencies = ["mbse-schemas>=0.35.0,<1.0", "mbse-expressions>=0.15.2,<1.0", "mbse-programs>=0.5.1,<1.0",
+                "mbse-transforms>=0.3.1,<1.0"]
 
 [tool.setuptools.package-data]
 "mbse.Codegen.Python" = ["skill/*.md", "skill/references/*.md"]
@@ -31,8 +31,8 @@ dev = [
 [tool.uv.sources]
 mbse-schemas = { path = "../../mbse-schemas/python3", editable = true }  # the sibling checkouts: ../mbse-basis/scripts/polyrepo.py
 mbse-expressions = { path = "../../mbse-expressions/python3", editable = true }
-mbse-patterns = { path = "../../mbse-patterns/python3", editable = true }
 mbse-programs = { path = "../../mbse-programs/python3", editable = true }
+mbse-transforms = { path = "../../mbse-transforms/python3", editable = true }
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

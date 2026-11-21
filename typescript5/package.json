@@ -1,7 +1,7 @@
 {
   "name": "@mbse/codegen-python",
-  "version": "0.16.0",
-  "description": "Schemas as idiomatic Python source and back: mbse-schemas' schemas rendered as dataclasses through mbse-programs' syntax trees, step by step, by mbse-patterns' transforms (TypeScript implementation)",
+  "version": "0.17.0",
+  "description": "Schemas as idiomatic Python source and back: mbse-schemas' schemas rendered as dataclasses through mbse-programs' syntax trees, step by step, by mbse-transforms' transforms (TypeScript implementation)",
   "keywords": [
     "code generation",
     "python",
@@ -20,10 +20,10 @@
     "node": ">=22"
   },
   "scripts": {
-    "postinstall": "python3 ../../mbse-basis/scripts/polyrepo.py check && npm --prefix ../../mbse-schemas/typescript5 install --no-audit --no-fund && npm --prefix ../../mbse-expressions/typescript5 install --no-audit --no-fund && npm --prefix ../../mbse-patterns/typescript5 install --no-audit --no-fund && npm --prefix ../../mbse-programs/typescript5 install --no-audit --no-fund",
+    "postinstall": "python3 ../../mbse-basis/scripts/polyrepo.py check && npm --prefix ../../mbse-schemas/typescript5 install --no-audit --no-fund && npm --prefix ../../mbse-expressions/typescript5 install --no-audit --no-fund && npm --prefix ../../mbse-programs/typescript5 install --no-audit --no-fund && npm --prefix ../../mbse-transforms/typescript5 install --no-audit --no-fund",
     "typecheck": "tsc --noEmit",
-    "test": "tsx tests/run-notebooks.ts --typecheck",
-    "coverage": "c8 --check-coverage --100 tsx tests/run-notebooks.ts --typecheck"
+    "test": "tsx tests/run-notebooks.ts --typecheck tests/02_Skill.ipynb",
+    "coverage": "c8 --check-coverage --100 tsx tests/run-notebooks.ts --typecheck tests/02_Skill.ipynb"
   },
   "devDependencies": {
     "@types/node": "^22.20.4",
@@ -34,7 +34,7 @@
   "dependencies": {
     "@mbse/schemas": "file:../../mbse-schemas/typescript5",
     "@mbse/expressions": "file:../../mbse-expressions/typescript5",
-    "@mbse/patterns": "file:../../mbse-patterns/typescript5",
-    "@mbse/programs": "file:../../mbse-programs/typescript5"
+    "@mbse/programs": "file:../../mbse-programs/typescript5",
+    "@mbse/transforms": "file:../../mbse-transforms/typescript5"
   }
 }

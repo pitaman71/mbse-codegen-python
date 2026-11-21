@@ -2,8 +2,9 @@
 
 mbse-codegen-python renders [mbse-schemas](https://github.com/pitaman71/mbse-schemas)' schemas as Python source, and
 reads Python source back into schemas, through [mbse-programs](https://github.com/pitaman71/mbse-programs)' Python
-syntax trees, step by step with [mbse-patterns](https://github.com/pitaman71/mbse-patterns)' `Transforms`. Two
-equivalent implementations exist: `python3/` and `typescript5/`; both generate Python.
+syntax trees, step by step with [mbse-transforms](https://github.com/pitaman71/mbse-transforms)' transforms. Two
+equivalent implementations exist: `python3/` and `typescript5/`; both generate Python. `Types` is being ported onto
+mbse-transforms, stage by stage, as [the port proposal](docs/proposals/port/README.md) says.
 
 ## Start here
 
@@ -14,7 +15,7 @@ equivalent implementations exist: `python3/` and `typescript5/`; both generate P
 | Understand a design decision or an open question | mbse-basis [CAP-027: Python3 source generated from schemas](https://github.com/pitaman71/mbse-basis/blob/main/docs/capabilities/CAP-027.md), by section (and [CAP-039: schemas round-trip through Python3](https://github.com/pitaman71/mbse-basis/blob/main/docs/capabilities/CAP-039.md), [FEA-021: every generation ambiguity a parameter](https://github.com/pitaman71/mbse-basis/blob/main/docs/features/FEA-021.md)) |
 | Change the package | this file, then [Equivalence](docs/EQUIVALENCE.md) |
 | Find or add a test case | [Test plan](python3/tests/TestPlan.md) (TypeScript's plan lists only its differences) |
-| Write the transforms' constraints | [mbse-patterns' AGENTS.md](https://github.com/pitaman71/mbse-patterns/blob/main/AGENTS.md), in the sibling checkout |
+| Define, apply and certify the transforms | [mbse-transforms' AGENTS.md](https://github.com/pitaman71/mbse-transforms/blob/main/AGENTS.md), in the sibling checkout |
 | Build or print syntax trees | [mbse-programs' AGENTS.md](https://github.com/pitaman71/mbse-programs/blob/main/AGENTS.md), in the sibling checkout |
 
 ## Read before any work
@@ -56,7 +57,8 @@ skills/sync.sh                                  # after editing skills/mbse-code
 
 Sibling checkouts beside this one, pinned by version and commit in `siblings.json` (see mbse-basis'
 `scripts/polyrepo.py`): [mbse-schemas](https://github.com/pitaman71/mbse-schemas) (the schemas, reflected as a store's
-objects), [mbse-expressions](https://github.com/pitaman71/mbse-expressions) (the transforms' constraints),
-[mbse-patterns](https://github.com/pitaman71/mbse-patterns) (`Transforms`: sessions, steps, policies and traces) and
+objects), [mbse-expressions](https://github.com/pitaman71/mbse-expressions) (the expressions of Python's statements,
+their annotations among them), [mbse-transforms](https://github.com/pitaman71/mbse-transforms) (`Transforms`: the
+transforms as data, their application, certificates, candidates and policies) and
 [mbse-programs](https://github.com/pitaman71/mbse-programs) (Python's syntax trees, parsing and printing). The other
 target languages have their own repositories: mbse-codegen-ccpp, mbse-codegen-typescript and mbse-codegen-verilog.

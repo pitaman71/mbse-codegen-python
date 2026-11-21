@@ -5,13 +5,21 @@ description: Generate Python dataclasses from mbse-schemas schemas, and read dat
 
 # mbse-codegen-python
 
+**Being ported: what follows teaches 0.16's API, which 0.17 removed.** mbse-codegen-python 0.17 ports `Types` onto
+[mbse-transforms](https://github.com/pitaman71/mbse-transforms), stage by stage, as
+[the port proposal](mbse:mbse-codegen-python/docs/proposals/port/README.md#stages) says, and its stage 6 rewrites this
+skill. Until then, the programs below are tagged `python 0.16` and `typescript 0.16`, and no check runs them. What
+0.17 has so far is the transforms as data: `Types.install`, each transform's prototype, and `Types.INSTALLS`, everything
+a store holding the transforms needs, the transforms defined in mbse-transforms' catalog
+([the transforms as data](mbse:mbse-codegen-python/docs/proposals/port/README.md#each-transform-as-mbse-transforms-has-it)).
+
 Code generated from a specification keeps the two from drifting ([FEA-022: code generation](mbse:mbse-basis/docs/features/README.md#FEA-022)).
 `Types` renders the object schemas a store registers (and those they refer to) as Python dataclasses, and reads a
 module's dataclasses back as schemas. Each is a session of [mbse-patterns](https://github.com/pitaman71/mbse-patterns)'
 transforms, one step per decision, over one store: the schemas, Python's syntax trees
 ([mbse-programs](https://github.com/pitaman71/mbse-programs)) and the output module.
 
-```python
+```python 0.16
 from mbse.Codegen.Python import Types
 from mbse.Patterns import Transforms as T
 from mbse.Programs.Python import Python312
@@ -66,7 +74,7 @@ proxy = owning.Owner().items(lambda e: e.item(owning.Item().create()).since(2020
 assert years(owner) == years(proxy) == [2020]
 ```
 
-```typescript
+```typescript 0.16
 import { Types } from "@mbse/codegen-python";
 import { Transforms as T } from "@mbse/patterns";
 import { Python312 } from "@mbse/programs/Python";
