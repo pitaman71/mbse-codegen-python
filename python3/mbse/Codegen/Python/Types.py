@@ -79,7 +79,9 @@ def install(txn: Any) -> Any:
             lambda _: _.Alias.name("Codegen.Alias").symbols({"s": S.OfUnion}).spec([
                 lambda f: f.s.flat(True).branches(lambda a: a.insert(lambda e: e)).parameters(lambda a: a.clear()),
             ]),
-            lambda _: _.ListAlias.name("Codegen.ListAlias").symbols({"s": S.OfContainer}),
+            lambda _: _.ListAlias.name("Codegen.ListAlias").symbols({"s": S.OfContainer}).spec([
+                lambda f: f.s.parameters(lambda a: a.clear()),
+            ]),
             # --- Drops: what a schema of the kind holds that has no Python form, by reason ---
             lambda _: _.DropInlineObject.name("Codegen.DropInlineObject").symbols({"s": S.OfObject}),
             lambda _: _.DropInlineRelation.name("Codegen.DropInlineRelation").symbols({"r": S.OfRelation}),
