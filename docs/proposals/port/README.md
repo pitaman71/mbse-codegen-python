@@ -263,7 +263,7 @@ plans, and lands as a pull request.
    |---|---|---|
    | `Codegen.Dataclass`, `s`: `S.OfObject` | named; `_.s.parameters(lambda a: a.clear())`; `_.s.adjacencies(lambda a: a.remove(lambda e: e.adjacency(lambda j: j.relation([S.OfRelation(lambda r: r.parameters(lambda b: b.insert(lambda h: h)))]))))` | holding nothing unbuilt, at any depth |
    | `Codegen.Entry`, `r`: `S.OfRelation` | named; `_.r.parameters(lambda a: a.clear())` | holding nothing unbuilt; no link declared by an object schema declaring parameters, since a declarer is reached only through the relation's anonymous adjacency (`Schemas.Relating`), which no spec names |
-   | `Codegen.Union`, `s`: `S.OfUnion` | named; `_.s.flat(False).branches(lambda a: a.insert(lambda e: e)).parameters(lambda a: a.clear())` | holding nothing unbuilt; not flat where `flat` is absent: a spec states a value or its absence, never "false or absent", so a union whose `flat` is absent passes neither this spec nor `Codegen.Alias`'s |
+   | `Codegen.Union`, `s`: `S.OfUnion` | named; `_.s.flat(False).branches(lambda a: a.insert(lambda e: e)).parameters(lambda a: a.clear())` | holding nothing unbuilt. `flat(False)` keeps a union that never sets `flat`, which reads false (INS-04's `book.Reach`); only a union whose `flat` is cleared (`flat(None)`, absent) passes neither this spec nor `Codegen.Alias`'s, since a spec states a value or its absence, never "false or absent" |
    | `Codegen.Intersection`, `s`: `S.OfIntersection` | named; `_.s.parts(lambda a: a.insert(lambda e: e)).parameters(lambda a: a.clear())` | holding nothing unbuilt, a flat intersection's inline parts' properties included |
    | `Codegen.Alias`, `s`: `S.OfUnion` | named; `_.s.flat(True).branches(lambda a: a.insert(lambda e: e)).parameters(lambda a: a.clear())` | holding nothing unbuilt |
    | `Codegen.ListAlias`, `s`: `S.OfContainer` | named | its element and index holding nothing unbuilt |
@@ -373,7 +373,10 @@ Each is reported, not worked around
 5. **A prototype's conditions that need an expression wait on CAP-142**, already blocked
    ([CAP-142: expressions evaluated in queries](https://github.com/pitaman71/mbse-basis/blob/main/docs/capabilities/CAP-142.md#blocked)).
    Decided, 2. Stage 1 measured which they are (Stages, 1): holding nothing unbuilt at any depth, a link no object
-   schema declares, what a drop drops, and a union's `flat` false or absent.
+   schema declares, what a drop drops, and a union's `flat` false or cleared (a union that never sets `flat` reads
+   false, and `Codegen.Union`'s `flat(False)` keeps it). A callback in a spec cannot stand in for one: it is recorded
+   as the expression is built, never evaluated against each candidate, and silently matches nothing (mbse-schemas'
+   decoupled-code proposal, Gaps found, 5).
 ## Risks
 
 - **Inserting into a module's value.** Where one module is the `sync` of several applications, name order may need a
